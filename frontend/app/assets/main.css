@@ -244,3 +244,27 @@ a.material-row:hover { background: var(--soft); }
 @media (max-width: 900px) { .business-workspace { grid-template-columns: 1fr; } }
 @media (max-width: 480px) { .business-editor form, .business-preview { padding: 20px; } .business-record-summary dl > div { grid-template-columns: 76px minmax(0, 1fr); gap: 12px; } .business-editor .button-row { flex-direction: column; align-items: stretch; } }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; } }
+
+.recipe-fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
+.recipe-fieldset > legend { font-size: 1.2rem; font-weight: 700; margin-bottom: 24px; }
+.recipe-fieldset .form-row { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 20px; }
+.recipe-check { display: flex; gap: 10px; align-items: center; margin: 10px 0 20px; }
+.recipe-check input { width: 22px; min-height: 22px; }
+.recipe-line { border: 1px solid var(--line); border-radius: 9px; padding: 20px; margin: 22px 0; min-width: 0; background: var(--surface); }
+.recipe-line legend { padding: 0 8px; font-weight: 650; }
+.recipe-row-links { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; font-size: .85rem; }
+.recipe-notes { margin-top: 32px; }
+.recipe-copy { border-top: 1px solid var(--line); margin-top: 32px; padding-top: 24px; }
+.recipe-copy p { margin: 8px 0 16px; color: var(--muted); }
+.recipe-cost-rows { list-style: none; padding: 0; }
+.recipe-cost-rows li { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1.5fr) minmax(0, .8fr); gap: 20px; padding: 20px 0; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+.recipe-cost-rows li > strong { text-align: right; }
+.recipe-cost-rows details { font-size: .8rem; }
+.recipe-editor .notice { margin-bottom: 18px; }
+.recipe-list li { overflow-wrap: anywhere; }
+@media (max-width: 600px) {
+  .recipe-fieldset .form-row { grid-template-columns: minmax(0, 1fr); gap: 0; }
+  .recipe-line { padding: 15px; }
+  .recipe-cost-rows li { grid-template-columns: minmax(0, 1fr); gap: 10px; }
+  .recipe-cost-rows li > strong { text-align: left; }
+}

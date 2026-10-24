@@ -10,6 +10,7 @@ use crate::{
     lifecycle::{Lifecycle, Policy},
     purchase_order::OrderFilter,
     receipt::ReceiptFilter,
+    recipe::{CopyRecipe, CreateRecipe, RecipeFilter, ReviseRecipe},
     store::{CreateMaterial, Store, StoreError},
 };
 use axum::{
@@ -206,6 +207,26 @@ pub fn router(state: AppState) -> Router {
         .route("/api/receipts", get(receipt_list))
         .route("/api/receipts/{id}", get(receipt_detail))
         .route("/api/holdings/{id}", get(holding_detail))
+        .route(
+            "/api/recipes",
+            get(recipe_list).merge(post(recipe_create).layer(DefaultBodyLimit::max(256 * 1024))),
+        )
+        .route("/api/recipes/{id}", get(recipe_detail))
+        .route("/api/recipes/{id}/cost", get(recipe_cost))
+        .route("/api/recipes/{id}/versions/{version}", get(recipe_version))
+        .route(
+            "/api/recipes/{id}/versions/{version}/cost",
+            get(recipe_version_cost),
+        )
+        .route("/api/materials/{id}/recipe-uses", get(recipe_uses))
+        .route(
+            "/api/recipes/{id}/versions",
+            post(recipe_revise).layer(DefaultBodyLimit::max(256 * 1024)),
+        )
+        .route(
+            "/api/recipes/{id}/copies",
+            post(recipe_copy).layer(DefaultBodyLimit::max(256 * 1024)),
+        )
         .route("/api/heartbeat", get(heartbeat))
         .fallback(static_asset)
         .layer(DefaultBodyLimit::max(16 * 1024))
@@ -563,6 +584,125 @@ async fn holding_detail(
     Ok(Json(detail))
 }
 
+async fn recipe_list(
+    State(state): State<AppState>,
+    input: Result<Query<RecipeFilter>, QueryRejection>,
+) -> Result<impl IntoResponse, ApiError> {
+    let Query(filter) = input
+        .map_err(|error| ApiError(StatusCode::BAD_REQUEST, error.body_text(), "validation"))?;
+    Ok(Json(
+        state.with_store(move |s| s.recipe_list(filter)).await?,
+    ))
+}
+
+fn recipe_not_found() -> ApiError {
+    ApiError(
+        StatusCode::NOT_FOUND,
+        "레시피 또는 버전을 찾을 수 없습니다.".into(),
+        "not_found",
+    )
+}
+
+async fn recipe_detail(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<impl IntoResponse, ApiError> {
+    let detail = state
+        .with_store(move |s| s.recipe_detail(&id))
+        .await?
+        .ok_or_else(recipe_not_found)?;
+    Ok(Json(detail))
+}
+
+async fn recipe_version(
+    State(state): State<AppState>,
+    Path((id, version)): Path<(String, String)>,
+) -> Result<impl IntoResponse, ApiError> {
+    let version = state
+        .with_store(move |s| s.recipe_version(&id, &version))
+        .await?
+        .ok_or_else(recipe_not_found)?;
+    Ok(Json(version))
+}
+
+async fn recipe_cost(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<impl IntoResponse, ApiError> {
+    let cost = state
+        .with_store(move |s| s.recipe_cost(&id, None))
+        .await?
+        .ok_or_else(recipe_not_found)?;
+    Ok(Json(cost))
+}
+
+async fn recipe_version_cost(
+    State(state): State<AppState>,
+    Path((id, version)): Path<(String, String)>,
+) -> Result<impl IntoResponse, ApiError> {
+    let cost = state
+        .with_store(move |s| s.recipe_cost(&id, Some(&version)))
+        .await?
+        .ok_or_else(recipe_not_found)?;
+    Ok(Json(cost))
+}
+
+async fn recipe_uses(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<impl IntoResponse, ApiError> {
+    let uses = state
+        .with_store(move |s| s.recipe_uses(&id))
+        .await?
+        .ok_or_else(|| {
+            ApiError(
+                StatusCode::NOT_FOUND,
+                "재료를 찾을 수 없습니다.".into(),
+                "not_found",
+            )
+        })?;
+    Ok(Json(uses))
+}
+
+async fn recipe_create(
+    State(state): State<AppState>,
+    input: Result<Json<CreateRecipe>, JsonRejection>,
+) -> Result<impl IntoResponse, ApiError> {
+    let input = json_input(input)?;
+    Ok((
+        StatusCode::CREATED,
+        Json(state.with_store(move |s| s.recipe_create(input)).await?),
+    ))
+}
+
+async fn recipe_revise(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    input: Result<Json<ReviseRecipe>, JsonRejection>,
+) -> Result<impl IntoResponse, ApiError> {
+    let input = json_input(input)?;
+    Ok((
+        StatusCode::CREATED,
+        Json(
+            state
+                .with_store(move |s| s.recipe_revise(&id, input))
+                .await?,
+        ),
+    ))
+}
+
+async fn recipe_copy(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    input: Result<Json<CopyRecipe>, JsonRejection>,
+) -> Result<impl IntoResponse, ApiError> {
+    let input = json_input(input)?;
+    Ok((
+        StatusCode::CREATED,
+        Json(state.with_store(move |s| s.recipe_copy(&id, input)).await?),
+    ))
+}
+
 struct SocketGuard(AppState);
 impl Drop for SocketGuard {
     fn drop(&mut self) {
@@ -629,6 +769,8 @@ async fn static_asset(_headers: HeaderMap, request: Request<Body>) -> Response {
         || path == "/business"
         || path == "/orders"
         || path == "/receipts"
+        || path == "/recipes"
+        || path == "/recipes/new"
         || path
             .strip_prefix("/materials/")
             .is_some_and(|id| uuid::Uuid::parse_str(id).is_ok())
@@ -640,7 +782,13 @@ async fn static_asset(_headers: HeaderMap, request: Request<Body>) -> Response {
             .is_some_and(|id| uuid::Uuid::parse_str(id).is_ok())
         || path
             .strip_prefix("/receipts/")
-            .is_some_and(|id| uuid::Uuid::parse_str(id).is_ok());
+            .is_some_and(|id| uuid::Uuid::parse_str(id).is_ok())
+        || path.strip_prefix("/recipes/").is_some_and(|part| {
+            uuid::Uuid::parse_str(part).is_ok()
+                || part.split_once("/versions/").is_some_and(|(id, version)| {
+                    uuid::Uuid::parse_str(id).is_ok() && uuid::Uuid::parse_str(version).is_ok()
+                })
+        });
     let asset_path = if spa_route {
         "index.html"
     } else {

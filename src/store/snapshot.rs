@@ -1,10 +1,11 @@
 use super::{
     Material, SCHEMA_VERSION, StoreError, business, catalog, holding, purchase_order,
-    read_materials, receipt, unavailable,
+    read_materials, receipt, recipe, unavailable,
 };
 use crate::catalog::{CatalogState, MaterialPriceVersion, MaterialVersion};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
+mod frozen6;
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -217,13 +218,13 @@ struct SnapshotStateV5 {
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct SnapshotV2Schema6 {
+struct SnapshotV2Schema7 {
     format_version: u32,
     schema_version: i64,
     sequence: String,
     request_id: String,
     recorded_at: String,
-    state: SnapshotStateV6,
+    state: SnapshotStateV7,
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -248,6 +249,34 @@ struct SnapshotStateV6 {
     holding_versions: Vec<holding::HoldingVersion>,
     holding_heads: Vec<holding::HoldingHead>,
     order_receipt_closures: Vec<receipt::ClosureRow>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SnapshotStateV7 {
+    materials: Vec<Material>,
+    material_versions: Vec<MaterialVersion>,
+    material_heads: Vec<Head>,
+    material_prices: Vec<MaterialPriceVersion>,
+    catalog_state: CatalogState,
+    creation_requests: Vec<LegacyRequest>,
+    mutation_requests: Vec<MutationRecord>,
+    business_records: Vec<business::Record>,
+    business_revisions: Vec<crate::business::BusinessRevision>,
+    business_heads: Vec<business::Head>,
+    business_confirmations: Vec<business::ConfirmationRow>,
+    business_catalog_price_results: Vec<business::PriceResult>,
+    business_corrections: Vec<crate::business::BusinessCorrection>,
+    purchase_orders: Vec<purchase_order::OrderRecord>,
+    purchase_order_versions: Vec<crate::purchase_order::OrderVersion>,
+    purchase_order_heads: Vec<purchase_order::OrderHead>,
+    receipts: Vec<crate::receipt::ReceiptRecord>,
+    holding_versions: Vec<holding::HoldingVersion>,
+    holding_heads: Vec<holding::HoldingHead>,
+    order_receipt_closures: Vec<receipt::ClosureRow>,
+    recipe_versions: Vec<recipe::VersionRow>,
+    recipe_lines: Vec<recipe::LineRow>,
+    recipe_heads: Vec<recipe::Head>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -359,7 +388,8 @@ pub(super) fn encode(
     let old = read_catalog_state(connection)?;
     let rows = business::snapshot_rows(connection)?;
     let orders = purchase_order::order_snapshot_rows(connection)?;
-    let state = SnapshotStateV6 {
+    let recipes = recipe::snapshot_rows(connection)?;
+    let state = SnapshotStateV7 {
         materials: old.materials,
         material_versions: old.material_versions,
         material_heads: old.material_heads,
@@ -380,8 +410,11 @@ pub(super) fn encode(
         holding_versions: holding::versions(connection, None)?,
         holding_heads: holding::heads(connection)?,
         order_receipt_closures: receipt::closures(connection)?,
+        recipe_versions: recipes.versions,
+        recipe_lines: recipes.lines,
+        recipe_heads: recipes.heads,
     };
-    let snapshot = SnapshotV2Schema6 {
+    let snapshot = SnapshotV2Schema7 {
         format_version: 2,
         schema_version: SCHEMA_VERSION,
         sequence: sequence.to_string(),
@@ -451,7 +484,37 @@ pub(super) fn validate_source(
             current.sequence == sequence.to_string()
         }
         (Some(2), Some(6)) => {
-            let current: SnapshotV2Schema6 = serde_json::from_str(payload).map_err(unavailable)?;
+            let frozen: frozen6::Snapshot = serde_json::from_str(payload).map_err(unavailable)?;
+            let matching_sequence = frozen.sequence == sequence.to_string();
+            let current = frozen.into_state()?;
+            for revision in &current.business_revisions {
+                crate::business::normalize_business_payload(revision.payload.clone())
+                    .map_err(unavailable)?;
+            }
+            for version in &current.purchase_order_versions {
+                purchase_order::validate_stored_version(version)?;
+            }
+            validate_receipt_references(ReceiptReferences {
+                business_records: &current.business_records,
+                business_revisions: &current.business_revisions,
+                business_confirmations: &current.business_confirmations,
+                business_catalog_price_results: &current.business_catalog_price_results,
+                materials: &current.materials,
+                material_versions: &current.material_versions,
+                receipts: &current.receipts,
+                purchase_order_versions: &current.purchase_order_versions,
+            })?;
+            receipt::validate_snapshot(
+                &current.receipts,
+                &current.order_receipt_closures,
+                &current.purchase_order_versions,
+                &current.holding_versions,
+                &current.holding_heads,
+            )?;
+            matching_sequence
+        }
+        (Some(2), Some(7)) => {
+            let current: SnapshotV2Schema7 = serde_json::from_str(payload).map_err(unavailable)?;
             for revision in &current.state.business_revisions {
                 crate::business::normalize_business_payload(revision.payload.clone())
                     .map_err(unavailable)?;
@@ -459,13 +522,36 @@ pub(super) fn validate_source(
             for version in &current.state.purchase_order_versions {
                 purchase_order::validate_stored_version(version)?;
             }
-            validate_receipt_references(&current.state)?;
+            validate_receipt_references(ReceiptReferences {
+                business_records: &current.state.business_records,
+                business_revisions: &current.state.business_revisions,
+                business_confirmations: &current.state.business_confirmations,
+                business_catalog_price_results: &current.state.business_catalog_price_results,
+                materials: &current.state.materials,
+                material_versions: &current.state.material_versions,
+                receipts: &current.state.receipts,
+                purchase_order_versions: &current.state.purchase_order_versions,
+            })?;
             receipt::validate_snapshot(
                 &current.state.receipts,
                 &current.state.order_receipt_closures,
                 &current.state.purchase_order_versions,
                 &current.state.holding_versions,
                 &current.state.holding_heads,
+            )?;
+            recipe::validate_snapshot(
+                &current.state.recipe_versions,
+                &current.state.recipe_lines,
+                &current.state.recipe_heads,
+                &current.state.material_versions,
+                &current.state.materials,
+                &current
+                    .state
+                    .mutation_requests
+                    .iter()
+                    .map(|r| (r.sequence.as_str(), r.operation.as_str()))
+                    .collect::<Vec<_>>(),
+                sequence,
             )?;
             current.sequence == sequence.to_string()
         }
@@ -477,7 +563,18 @@ pub(super) fn validate_source(
     Ok(())
 }
 
-fn validate_receipt_references(state: &SnapshotStateV6) -> Result<(), StoreError> {
+struct ReceiptReferences<'a> {
+    business_records: &'a [business::Record],
+    business_revisions: &'a [crate::business::BusinessRevision],
+    business_confirmations: &'a [business::ConfirmationRow],
+    business_catalog_price_results: &'a [business::PriceResult],
+    materials: &'a [Material],
+    material_versions: &'a [MaterialVersion],
+    receipts: &'a [crate::receipt::ReceiptRecord],
+    purchase_order_versions: &'a [crate::purchase_order::OrderVersion],
+}
+
+fn validate_receipt_references(state: ReceiptReferences<'_>) -> Result<(), StoreError> {
     use crate::{
         business::{BusinessKind, BusinessPayload, BusinessStatus},
         domain::{Money, Quantity, Unit},
@@ -509,7 +606,7 @@ fn validate_receipt_references(state: &SnapshotStateV6) -> Result<(), StoreError
         return Err(bad());
     }
     let mut used = HashSet::new();
-    for receipt in &state.receipts {
+    for receipt in state.receipts {
         let confirmation = confirmations
             .get(&receipt.confirmation_id)
             .ok_or_else(bad)?;
@@ -591,7 +688,7 @@ fn validate_receipt_references(state: &SnapshotStateV6) -> Result<(), StoreError
             return Err(bad());
         }
     }
-    for confirmation in &state.business_confirmations {
+    for confirmation in state.business_confirmations {
         if records
             .get(&confirmation.record_id)
             .is_some_and(|record| record.kind == BusinessKind::Receipt)

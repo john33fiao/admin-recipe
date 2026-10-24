@@ -33,7 +33,7 @@ pub(super) fn normalize_meta(meta: &mut MutationMeta) -> Result<(), StoreError> 
     Ok(())
 }
 
-fn normalize_fields(
+pub(super) fn normalize_fields(
     name: &mut String,
     unit: &mut String,
     kind: &str,
@@ -178,7 +178,7 @@ pub(super) fn prices(
     .collect()
 }
 
-fn summary(
+pub(super) fn summary(
     connection: &Connection,
     version: MaterialVersion,
 ) -> Result<MaterialSummary, StoreError> {
@@ -254,7 +254,7 @@ fn insert_version(connection: &Connection, version: &MaterialVersion) -> Result<
     Ok(())
 }
 
-fn insert_material(
+pub(super) fn insert_material(
     connection: &Connection,
     name: String,
     unit: String,

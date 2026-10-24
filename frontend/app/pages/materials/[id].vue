@@ -57,6 +57,7 @@ useHead({ title: computed(() => `${material.value?.name ?? '재료 상세'} | �
   </section>
   <template v-if="material">
     <HoldingPanel :material-id="material.id" :revision="material.revision" />
+    <RecipeUsesPanel :material-id="material.id" :revision="material.revision" />
     <MaterialEditor :key="material.id" :material="material" :refresh="load" />
     <p class="business-entry"><NuxtLink class="secondary-link" :to="{ path: '/business', query: { material: material.id } }">가격 초안 작성</NuxtLink><span>가격 입력을 임시 저장하고 나중에 확인한 뒤 확정할 수 있습니다.</span></p>
     <section class="history-section" aria-labelledby="price-history-title">
