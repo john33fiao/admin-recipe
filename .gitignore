@@ -1,0 +1,15 @@
+AGENTS.md
+AGENTS.override.md
+
+# Local agent instructions and skill bundles
+/.codex/
+/.agents/
+
+# Private source material and local scratch output
+/docs/refs/private/
+/tmp/
+
+# Local credentials and operating-system metadata
+.env
+.env.*
+.DS_Store
