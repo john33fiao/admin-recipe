@@ -1,25 +1,42 @@
-import type { BusinessPayload, BusinessPending, BusinessPreview, DraftPriceV1 } from '../types/business.ts'
+import type { BusinessPayload, BusinessPending, BusinessPreview, CatalogPricePayload } from '../types/business.ts'
 import type { CatalogState } from '../types/material.ts'
 
 export const businessStatuses = { draft: '임시 저장', confirmed: '확정', archived: '보관' }
-export const blankPriceDraft = (): BusinessPayload => ({ kind: 'catalog_price', version: 1, data: { material_id: null, material_version_id: null, quantity: '', unit: 'g', amount: '', note: '' } })
+export const blankPriceDraft = (): CatalogPricePayload => ({ kind: 'catalog_price', version: 1, data: { material_id: null, material_version_id: null, quantity: '', unit: 'g', amount: '', note: '' } })
 const uuid = (value: unknown): value is string => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)
 const object = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value)
 const exact = (value: Record<string, unknown>, keys: string[]) => Object.keys(value).length === keys.length && keys.every(key => Object.hasOwn(value, key))
 
-export function validateBusinessDraft(payload: BusinessPayload): Partial<Record<keyof DraftPriceV1, string>> {
-  const errors: Partial<Record<keyof DraftPriceV1, string>> = {}
-  const data = payload.data
-  for (const field of ['material_id', 'material_version_id'] as const) if (data[field] !== null && !uuid(data[field])) errors[field] = '재료를 다시 선택해 주세요.'
-  for (const [field, limit] of [['quantity', 80], ['amount', 80], ['unit', 20], ['note', 2000]] as const) {
+export function validateBusinessDraft(payload: BusinessPayload): Record<string, string> {
+  const errors: Record<string, string> = {}
+  const data = payload.data as unknown as Record<string, unknown>
+  const ids = payload.kind === 'catalog_price' || payload.data.action === 'place' ? ['material_id', 'material_version_id'] : payload.data.action === 'revise' ? ['order_id', 'expected_order_version_id', 'material_version_id'] : ['order_id', 'expected_order_version_id']
+  for (const field of ids) if (!((field === 'material_id' || field === 'material_version_id') && data[field] === null) && !uuid(data[field])) errors[field] = '대상과 현재 버전을 다시 확인해 주세요.'
+  const fields: Array<[string, number]> = payload.kind === 'catalog_price' ? [['quantity', 80], ['amount', 80], ['unit', 20], ['note', 2000]] : payload.data.action === 'cancel' ? [['note', 2000]] : [['quantity', 80], ['estimated_amount', 80], ['unit', 20], ['supplier', 200], ['expected_date', 32], ['note', 2000]]
+  for (const [field, limit] of fields) {
     const value = data[field]
     if (typeof value !== 'string' || [...value].length > limit || (field === 'note' ? /[\u0000-\u0009\u000b-\u001f\u007f-\u009f]/u : /[\u0000-\u001f\u007f-\u009f]/u).test(value)) errors[field] = `${limit}자 이내의 올바른 문자를 입력해 주세요.`
   }
   return errors
 }
 
-export function copyPayload(payload: BusinessPayload): BusinessPayload { return { kind: 'catalog_price', version: 1, data: { ...payload.data } } }
-export function samePayload(a: BusinessPayload, b: BusinessPayload) { return Object.keys(a.data).every(key => a.data[key as keyof DraftPriceV1] === b.data[key as keyof DraftPriceV1]) }
+export function copyPayload<T extends BusinessPayload>(payload: T): T { return { kind: payload.kind, version: payload.version, data: { ...payload.data } } as T }
+export function samePayload(a: BusinessPayload, b: BusinessPayload) {
+  const left = a.data as unknown as Record<string, unknown>
+  const right = b.data as unknown as Record<string, unknown>
+  return a.kind === b.kind && a.version === b.version && Object.keys(left).length === Object.keys(right).length && Object.keys(left).every(key => left[key] === right[key])
+}
+export function sameBusinessTarget(a: BusinessPayload, b: BusinessPayload) {
+  if (a.kind !== b.kind) return false
+  if (a.kind === 'catalog_price' || b.kind === 'catalog_price') return true
+  return a.data.action === b.data.action && (a.data.action === 'place' || (b.data.action !== 'place' && a.data.order_id === b.data.order_id))
+}
+export function businessLabel(payload: BusinessPayload) { return payload.kind === 'catalog_price' ? '사전 가격' : { place: '주문 작성', revise: '주문 수정', cancel: '주문 취소' }[payload.data.action] }
+export function businessInputText(payload: BusinessPayload) {
+  if (payload.kind === 'catalog_price') return `${payload.data.quantity || '수량 미입력'} ${payload.data.unit || '단위 미입력'} / ${payload.data.amount === '' ? '금액 미입력' : `${payload.data.amount}원`}`
+  if (payload.data.action === 'cancel') return `주문 ${payload.data.order_id.slice(0, 8)} 취소`
+  return `${payload.data.quantity || '수량 미입력'} ${payload.data.unit || '단위 미입력'} / 예상 금액 ${payload.data.estimated_amount.trim() === '' ? '미입력' : `${payload.data.estimated_amount}원`}`
+}
 
 export function businessPending(action: 'create', recordId: null, headId: null, state: CatalogState, payload: BusinessPayload, corrects: string | null, makeId: () => string): Extract<BusinessPending, { action: 'create' }>
 export function businessPending(action: 'revise' | 'archive', recordId: string, headId: string, state: CatalogState, payload: BusinessPayload, corrects: string | null, makeId: () => string): BusinessPending
@@ -36,9 +53,16 @@ export function confirmPending(preview: BusinessPreview, makeId: () => string): 
   return { action: 'confirm', record_id: preview.record_id, body: { meta: { request_id: makeId(), epoch: preview.state.epoch, expected_revision: preview.state.revision }, expected_head_id: preview.head_id } }
 }
 
-function validPayload(value: unknown): value is BusinessPayload {
-  if (!object(value) || !exact(value, ['kind', 'version', 'data']) || value.kind !== 'catalog_price' || value.version !== 1 || !object(value.data)) return false
-  if (!exact(value.data, ['material_id', 'material_version_id', 'quantity', 'unit', 'amount', 'note'])) return false
+export function validBusinessPayload(value: unknown): value is BusinessPayload {
+  if (!object(value) || !exact(value, ['kind', 'version', 'data']) || value.version !== 1 || !object(value.data)) return false
+  if (value.kind === 'catalog_price') { if (!exact(value.data, ['material_id', 'material_version_id', 'quantity', 'unit', 'amount', 'note'])) return false }
+  else if (value.kind === 'purchase_order') {
+    const common = ['material_version_id', 'quantity', 'unit', 'supplier', 'expected_date', 'estimated_amount', 'note']
+    if (value.data.action === 'place') { if (!exact(value.data, ['action', 'material_id', ...common])) return false }
+    else if (value.data.action === 'revise') { if (!exact(value.data, ['action', 'order_id', 'expected_order_version_id', ...common])) return false }
+    else if (value.data.action === 'cancel') { if (!exact(value.data, ['action', 'order_id', 'expected_order_version_id', 'note'])) return false }
+    else return false
+  } else return false
   return Object.keys(validateBusinessDraft(value as unknown as BusinessPayload)).length === 0
 }
 
@@ -50,10 +74,11 @@ export function restoreBusinessPending(raw: string | null): BusinessPending | nu
     const body = value.body
     if (!object(body.meta) || !exact(body.meta, ['request_id', 'epoch', 'expected_revision']) || !uuid(body.meta.request_id) || !uuid(body.meta.epoch) || typeof body.meta.expected_revision !== 'string' || !/^\d+$/.test(body.meta.expected_revision)) return null
     if (value.action === 'create') {
-      if (value.record_id !== null || !exact(body, ['meta', 'payload', 'corrects_confirmation_id']) || !validPayload(body.payload) || !(body.corrects_confirmation_id === null || uuid(body.corrects_confirmation_id))) return null
+      if (value.record_id !== null || !exact(body, ['meta', 'payload', 'corrects_confirmation_id']) || !validBusinessPayload(body.payload) || !(body.corrects_confirmation_id === null || uuid(body.corrects_confirmation_id))) return null
+      if (body.payload.kind === 'purchase_order' && body.corrects_confirmation_id !== null) return null
     } else {
       if (!uuid(value.record_id) || !uuid(body.expected_head_id)) return null
-      if (value.action === 'revise') { if (!exact(body, ['meta', 'expected_head_id', 'payload']) || !validPayload(body.payload)) return null }
+      if (value.action === 'revise') { if (!exact(body, ['meta', 'expected_head_id', 'payload']) || !validBusinessPayload(body.payload)) return null }
       else if (value.action === 'confirm' || value.action === 'archive') { if (!exact(body, ['meta', 'expected_head_id'])) return null }
       else return null
     }

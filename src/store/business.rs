@@ -1,4 +1,4 @@
-use super::{Store, StoreError, catalog, snapshot, unavailable};
+use super::{Store, StoreError, catalog, purchase_order, snapshot, unavailable};
 use crate::{
     business::*,
     catalog::MutationMeta,
@@ -11,6 +11,26 @@ use uuid::Uuid;
 
 fn validation(message: impl std::fmt::Display) -> StoreError {
     StoreError::Validation(message.to_string())
+}
+
+fn parse_kind(kind: &str) -> Result<BusinessKind, StoreError> {
+    match kind {
+        "catalog_price" => Ok(BusinessKind::CatalogPrice),
+        "purchase_order" => Ok(BusinessKind::PurchaseOrder),
+        _ => Err(unavailable("지원하지 않는 업무 종류입니다")),
+    }
+}
+fn kind_text(kind: BusinessKind) -> &'static str {
+    match kind {
+        BusinessKind::CatalogPrice => "catalog_price",
+        BusinessKind::PurchaseOrder => "purchase_order",
+    }
+}
+fn result_material_id(result: &BusinessResult) -> &str {
+    match result {
+        BusinessResult::CatalogPrice { material_id, .. }
+        | BusinessResult::PurchaseOrder { material_id, .. } => material_id,
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -74,12 +94,9 @@ fn records(connection: &Connection) -> Result<Vec<Record>, StoreError> {
         .map_err(unavailable)?.collect::<rusqlite::Result<Vec<_>>>().map_err(unavailable)?;
     rows.into_iter()
         .map(|(id, kind, created_at, seq, corrects)| {
-            if kind != "catalog_price" {
-                return Err(unavailable("지원하지 않는 업무 종류입니다"));
-            }
             Ok(Record {
                 id,
-                kind: BusinessKind::CatalogPrice,
+                kind: parse_kind(&kind)?,
                 created_at,
                 created_sequence: seq.to_string(),
                 corrects_confirmation_id: corrects,
@@ -93,12 +110,9 @@ fn record(connection: &Connection, id: &str) -> Result<Option<Record>, StoreErro
         [id], |r| Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,i64>(3)?,r.get::<_,Option<String>>(4)?)),
     ).optional().map_err(unavailable)?;
     row.map(|(id, kind, created_at, seq, corrects_confirmation_id)| {
-        if kind != "catalog_price" {
-            return Err(unavailable("지원하지 않는 업무 종류입니다"));
-        }
         Ok(Record {
             id,
-            kind: BusinessKind::CatalogPrice,
+            kind: parse_kind(&kind)?,
             created_at,
             created_sequence: seq.to_string(),
             corrects_confirmation_id,
@@ -117,7 +131,7 @@ fn revisions(
         .map(
             |(id, record_id, previous_revision_id, status, version, json, recorded_at, seq)| {
                 let payload: BusinessPayload = serde_json::from_str(&json).map_err(unavailable)?;
-                if version != i64::from(payload.version) {
+                if version != i64::from(payload.version()) {
                     return Err(unavailable("업무 입력 버전이 일치하지 않습니다"));
                 }
                 normalize_business_payload(payload.clone()).map_err(unavailable)?;
@@ -156,6 +170,9 @@ fn required_draft(
     let record =
         record(connection, id)?.ok_or_else(|| validation("업무 기록을 찾을 수 없습니다"))?;
     let head = current_head(connection, id)?;
+    if head.payload.kind() != record.kind {
+        return Err(unavailable("업무 종류와 입력 종류가 일치하지 않습니다"));
+    }
     if head.id != expected {
         return Err(StoreError::StaleState(
             "업무 입력이 변경되었습니다. 최신 내용을 확인하세요".into(),
@@ -182,7 +199,12 @@ fn confirmation(
         [id], |r| Ok(ConfirmationRow{id:r.get(0)?,record_id:r.get(1)?,revision_id:r.get(2)?,request_id:r.get(3)?,recorded_at:r.get(4)?,seq:r.get::<_,i64>(5)?.to_string()}),
     ).optional().map_err(unavailable)?;
     let Some(row) = row else { return Ok(None) };
-    let result = connection.query_row("SELECT p.id,p.material_id,p.material_version_id FROM business_catalog_price_results r JOIN material_prices p ON p.id=r.price_id WHERE r.confirmation_id=?1",[id],|r|Ok(BusinessResult{kind:BusinessKind::CatalogPrice,price_id:r.get(0)?,material_id:r.get(1)?,material_version_id:r.get(2)?})).map_err(unavailable)?;
+    let owner = record(connection, &row.record_id)?
+        .ok_or_else(|| unavailable("확정 업무 원본이 없습니다"))?;
+    let result = match owner.kind {
+        BusinessKind::CatalogPrice => connection.query_row("SELECT p.id,p.material_id,p.material_version_id FROM business_catalog_price_results r JOIN material_prices p ON p.id=r.price_id WHERE r.confirmation_id=?1",[id],|r|Ok(BusinessResult::CatalogPrice{price_id:r.get(0)?,material_id:r.get(1)?,material_version_id:r.get(2)?})).map_err(unavailable)?,
+        BusinessKind::PurchaseOrder => purchase_order::result(connection,id)?,
+    };
     Ok(Some(BusinessConfirmation {
         id: row.id,
         record_id: row.record_id,
@@ -228,7 +250,7 @@ fn chain(
             .ok_or_else(|| unavailable("정정 원기록 연결이 없습니다"))?;
         if let Some(previous) = events.last() {
             let previous: &BusinessConfirmation = previous;
-            if previous.result.material_id != event.result.material_id {
+            if result_material_id(&previous.result) != result_material_id(&event.result) {
                 return Err(unavailable("정정 대상 품목이 일치하지 않습니다"));
             }
         }
@@ -270,7 +292,21 @@ fn inspect(
     record: &Record,
     head: &BusinessRevision,
 ) -> Result<(Vec<BusinessIssue>, Option<BusinessEffect>), StoreError> {
-    let data = &head.payload.data;
+    match &head.payload {
+        BusinessPayload::CatalogPrice { .. } => inspect_price(connection, record, head),
+        BusinessPayload::PurchaseOrder { data, .. } => {
+            purchase_order::inspect_order(connection, data)
+        }
+    }
+}
+fn inspect_price(
+    connection: &Connection,
+    record: &Record,
+    head: &BusinessRevision,
+) -> Result<(Vec<BusinessIssue>, Option<BusinessEffect>), StoreError> {
+    let BusinessPayload::CatalogPrice { data, .. } = &head.payload else {
+        return Err(unavailable("가격 입력 종류가 올바르지 않습니다"));
+    };
     let mut issues = vec![];
     let material = match &data.material_id {
         Some(id) => catalog::current_version(connection, id)?,
@@ -365,7 +401,15 @@ fn inspect(
                 "대상은 이미 정정되었습니다. 최신 확정을 확인하세요",
             );
         }
-        if data.material_id.as_deref() != Some(&event.result.material_id) {
+        let BusinessResult::CatalogPrice {
+            material_id,
+            price_id,
+            ..
+        } = event.result
+        else {
+            return Err(unavailable("가격 정정 대상 종류가 다릅니다"));
+        };
+        if data.material_id.as_deref() != Some(&material_id) {
             issue(
                 &mut issues,
                 "material_id",
@@ -381,9 +425,9 @@ fn inspect(
                 "정정 이유를 입력하세요",
             );
         }
-        corrected_price = catalog::prices(connection, Some(&event.result.material_id))?
+        corrected_price = catalog::prices(connection, Some(&material_id))?
             .into_iter()
-            .find(|p| p.id == event.result.price_id);
+            .find(|p| p.id == price_id);
         if corrected_price.is_none() {
             return Err(unavailable("정정 대상 가격 결과가 없습니다"));
         }
@@ -392,8 +436,7 @@ fn inspect(
         return Ok((issues, None));
     }
     let material = material.ok_or_else(|| unavailable("재료 검증 결과가 없습니다"))?;
-    let effect = BusinessEffect {
-        kind: BusinessKind::CatalogPrice,
+    let effect = BusinessEffect::CatalogPrice {
         material_id: material.material_id.clone(),
         material_version_id: material.id,
         quantity: canonical_quantity
@@ -427,15 +470,19 @@ fn detail(connection: &Connection, id: &str) -> Result<Option<BusinessDetail>, S
     } else {
         vec![]
     };
-    let material_name = match (
-        &head.payload.data.material_id,
-        &head.payload.data.material_version_id,
-    ) {
-        (Some(material), Some(version)) => catalog::versions(connection, Some(material))?
-            .into_iter()
-            .find(|v| v.id == *version)
-            .map(|v| v.name),
-        _ => None,
+    let material_name = match &head.payload {
+        BusinessPayload::CatalogPrice { data, .. } => {
+            match (&data.material_id, &data.material_version_id) {
+                (Some(material), Some(version)) => catalog::versions(connection, Some(material))?
+                    .into_iter()
+                    .find(|v| v.id == *version)
+                    .map(|v| v.name),
+                _ => None,
+            }
+        }
+        BusinessPayload::PurchaseOrder { data, .. } => {
+            purchase_order::material_name(connection, data)?
+        }
     };
     let item = BusinessSummary {
         id: record.id,
@@ -485,7 +532,7 @@ fn append_revision(
 ) -> Result<String, StoreError> {
     let revision = Uuid::new_v4().to_string();
     connection.execute("INSERT INTO business_revisions(id,record_id,previous_revision_id,status,payload_version,payload_json,recorded_at,sequence) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",
-        params![revision,id,previous,status_text(status),payload.version,serde_json::to_string(payload).map_err(unavailable)?,time,seq]).map_err(unavailable)?;
+        params![revision,id,previous,status_text(status),payload.version(),serde_json::to_string(payload).map_err(unavailable)?,time,seq]).map_err(unavailable)?;
     connection.execute("INSERT INTO business_heads(record_id,current_revision_id) VALUES(?1,?2) ON CONFLICT(record_id) DO UPDATE SET current_revision_id=excluded.current_revision_id",params![id,revision]).map_err(unavailable)?;
     Ok(revision)
 }
@@ -503,6 +550,11 @@ fn check_target(
     payload: &BusinessPayload,
 ) -> Result<(), StoreError> {
     if let Some(target) = target {
+        let BusinessPayload::CatalogPrice { data, .. } = payload else {
+            return Err(validation(
+                "주문 수정·취소에는 가격 정정 연결을 사용할 수 없습니다",
+            ));
+        };
         let event = confirmation(connection, target)?
             .ok_or_else(|| validation("정정할 확정 기록을 찾을 수 없습니다"))?;
         if corrections(connection)?
@@ -513,11 +565,13 @@ fn check_target(
                 "대상은 이미 정정되었습니다. 최신 확정을 확인하세요".into(),
             ));
         }
-        if payload
-            .data
+        let BusinessResult::CatalogPrice { material_id, .. } = &event.result else {
+            return Err(validation("가격 정정 대상 종류가 다릅니다"));
+        };
+        if data
             .material_id
             .as_ref()
-            .is_some_and(|id| id != &event.result.material_id)
+            .is_some_and(|id| id != material_id)
         {
             return Err(validation("정정 대상의 재료를 변경할 수 없습니다"));
         }
@@ -567,8 +621,8 @@ impl Store {
                 let id = Uuid::new_v4().to_string();
                 tx.execute(
                     "INSERT INTO business_records(id,kind,created_at,created_sequence,corrects_confirmation_id)
-                     VALUES(?1,'catalog_price',?2,?3,?4)",
-                    params![id, time, seq, input.corrects_confirmation_id],
+                     VALUES(?1,?2,?3,?4,?5)",
+                    params![id, kind_text(input.payload.kind()), time, seq, input.corrects_confirmation_id],
                 ).map_err(unavailable)?;
                 append_revision(tx, &id, None, BusinessStatus::Draft, &input.payload, seq, time)?;
                 Ok(BusinessMutation {
@@ -595,6 +649,19 @@ impl Store {
             &payload,
             move |tx, seq, time, state| {
                 let (record, head) = required_draft(tx, &id, &input.expected_head_id)?;
+                if record.kind != input.payload.kind() {
+                    return Err(validation("저장한 업무의 종류를 바꿀 수 없습니다"));
+                }
+                if let (
+                    BusinessPayload::PurchaseOrder { data: old, .. },
+                    BusinessPayload::PurchaseOrder { data: new, .. },
+                ) = (&head.payload, &input.payload)
+                    && !purchase_order::same_action_target(old, new)
+                {
+                    return Err(validation(
+                        "저장한 주문 동작이나 대상 주문을 바꿀 수 없습니다",
+                    ));
+                }
                 check_target(
                     tx,
                     record.corrects_confirmation_id.as_deref(),
@@ -656,19 +723,6 @@ impl Store {
                     }
                     return Err(validation(message));
                 }
-                let data = &head.payload.data;
-                let price = catalog::apply_catalog_price(
-                    tx,
-                    catalog::PriceInput {
-                        material_id: data.material_id.as_deref().ok_or_else(|| validation("재료를 선택하세요"))?,
-                        expected_version_id: data.material_version_id.as_deref().ok_or_else(|| validation("재료 버전을 선택하세요"))?,
-                        quantity: &data.quantity,
-                        unit: &data.unit,
-                        amount: &data.amount,
-                    },
-                    seq,
-                    time,
-                )?;
                 let revision = append_revision(tx, &id, Some(&head.id), BusinessStatus::Confirmed, &head.payload, seq, time)?;
                 let event = Uuid::new_v4().to_string();
                 tx.execute(
@@ -676,10 +730,19 @@ impl Store {
                      VALUES(?1,?2,?3,?4,?5,?6)",
                     params![event, id, revision, input.meta.request_id, time, seq],
                 ).map_err(unavailable)?;
-                tx.execute(
-                    "INSERT INTO business_catalog_price_results(confirmation_id,price_id) VALUES(?1,?2)",
-                    params![event, price.id],
-                ).map_err(unavailable)?;
+                match &head.payload {
+                    BusinessPayload::CatalogPrice { data, .. } => {
+                        let price = catalog::apply_catalog_price(tx, catalog::PriceInput {
+                            material_id: data.material_id.as_deref().ok_or_else(||validation("재료를 선택하세요"))?,
+                            expected_version_id: data.material_version_id.as_deref().ok_or_else(||validation("재료 버전을 선택하세요"))?,
+                            quantity: &data.quantity, unit: &data.unit, amount: &data.amount,
+                        }, seq, time)?;
+                        tx.execute("INSERT INTO business_catalog_price_results(confirmation_id,price_id) VALUES(?1,?2)",params![event,price.id]).map_err(unavailable)?;
+                    }
+                    BusinessPayload::PurchaseOrder { data, .. } => {
+                        purchase_order::apply_order(tx,data,&event,seq,time)?;
+                    }
+                }
                 if let Some(target) = record.corrects_confirmation_id {
                     tx.execute(
                         "INSERT INTO business_corrections(target_confirmation_id,replacement_confirmation_id) VALUES(?1,?2)",

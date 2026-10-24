@@ -1,6 +1,8 @@
+pub use crate::purchase_order::DraftOrderActionV1;
 use crate::{
     catalog::{CatalogState, MaterialPriceVersion, MutationMeta},
     domain::DomainError,
+    purchase_order::{OrderAction, OrderProposal, OrderVersion, normalize_order_draft},
 };
 use serde::{Deserialize, Deserializer, Serialize, de::Error};
 use uuid::Uuid;
@@ -9,6 +11,7 @@ use uuid::Uuid;
 #[serde(rename_all = "snake_case")]
 pub enum BusinessKind {
     CatalogPrice,
+    PurchaseOrder,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -63,12 +66,32 @@ fn payload_version<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u32, D:
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct BusinessPayload {
-    pub kind: BusinessKind,
-    #[serde(deserialize_with = "payload_version")]
-    pub version: u32,
-    pub data: DraftPriceV1,
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum BusinessPayload {
+    CatalogPrice {
+        #[serde(deserialize_with = "payload_version")]
+        version: u32,
+        data: DraftPriceV1,
+    },
+    PurchaseOrder {
+        #[serde(deserialize_with = "payload_version")]
+        version: u32,
+        data: DraftOrderActionV1,
+    },
+}
+
+impl BusinessPayload {
+    pub fn kind(&self) -> BusinessKind {
+        match self {
+            Self::CatalogPrice { .. } => BusinessKind::CatalogPrice,
+            Self::PurchaseOrder { .. } => BusinessKind::PurchaseOrder,
+        }
+    }
+    pub fn version(&self) -> u32 {
+        match self {
+            Self::CatalogPrice { version, .. } | Self::PurchaseOrder { version, .. } => *version,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -87,18 +110,48 @@ pub struct DraftPriceV1 {
 pub fn normalize_business_payload(
     mut payload: BusinessPayload,
 ) -> Result<BusinessPayload, DomainError> {
-    if payload.version != 1 {
+    if payload.version() != 1 {
         return Err(DomainError("지원하지 않는 업무 입력 버전입니다".into()));
     }
-    let data = &mut payload.data;
+    match &mut payload {
+        BusinessPayload::CatalogPrice { data, .. } => normalize_price_draft(data)?,
+        BusinessPayload::PurchaseOrder { data, .. } => normalize_order_draft(data)?,
+    }
+    Ok(payload)
+}
+
+pub(crate) fn normalize_draft_uuid(value: &mut String, label: &str) -> Result<(), DomainError> {
+    *value = Uuid::parse_str(value)
+        .map_err(|_| DomainError(format!("{label}가 올바른 UUID가 아닙니다")))?
+        .to_string();
+    Ok(())
+}
+
+pub(crate) fn validate_draft_text(
+    text: &str,
+    label: &str,
+    limit: usize,
+    multiline: bool,
+) -> Result<(), DomainError> {
+    if text.chars().count() > limit
+        || text
+            .chars()
+            .any(|c| c.is_control() && !(multiline && c == '\n'))
+    {
+        return Err(DomainError(format!(
+            "{label}은 {limit}자 이내이며 허용되지 않는 제어문자를 포함할 수 없습니다"
+        )));
+    }
+    Ok(())
+}
+
+fn normalize_price_draft(data: &mut DraftPriceV1) -> Result<(), DomainError> {
     for (label, id) in [
         ("재료 ID", &mut data.material_id),
         ("재료 버전", &mut data.material_version_id),
     ] {
         if let Some(value) = id {
-            *value = Uuid::parse_str(value)
-                .map_err(|_| DomainError(format!("{label}가 올바른 UUID가 아닙니다")))?
-                .to_string();
+            normalize_draft_uuid(value, label)?;
         }
     }
     data.note = data.note.replace("\r\n", "\n").replace('\r', "\n");
@@ -108,17 +161,9 @@ pub fn normalize_business_payload(
         ("단위", data.unit.as_str(), 20, false),
         ("메모/정정 이유", data.note.as_str(), 2000, true),
     ] {
-        if text.chars().count() > limit
-            || text
-                .chars()
-                .any(|c| c.is_control() && !(multiline && c == '\n'))
-        {
-            return Err(DomainError(format!(
-                "{label}은 {limit}자 이내이며 허용되지 않는 제어문자를 포함할 수 없습니다"
-            )));
-        }
+        validate_draft_text(text, label, limit, multiline)?;
     }
-    Ok(payload)
+    Ok(())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -172,12 +217,20 @@ pub struct BusinessRevision {
     pub seq: String,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct BusinessResult {
-    pub kind: BusinessKind,
-    pub price_id: String,
-    pub material_id: String,
-    pub material_version_id: String,
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum BusinessResult {
+    CatalogPrice {
+        price_id: String,
+        material_id: String,
+        material_version_id: String,
+    },
+    PurchaseOrder {
+        action: OrderAction,
+        order_id: String,
+        order_version_id: String,
+        material_id: String,
+        material_version_id: String,
+    },
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -243,17 +296,24 @@ pub struct BusinessMutation {
     pub state: CatalogState,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct BusinessEffect {
-    pub kind: BusinessKind,
-    pub material_id: String,
-    pub material_version_id: String,
-    pub quantity: String,
-    pub amount: String,
-    pub unit: String,
-    pub corrects_confirmation_id: Option<String>,
-    pub previous_price: Option<MaterialPriceVersion>,
-    pub corrected_price: Option<MaterialPriceVersion>,
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum BusinessEffect {
+    CatalogPrice {
+        material_id: String,
+        material_version_id: String,
+        quantity: String,
+        amount: String,
+        unit: String,
+        corrects_confirmation_id: Option<String>,
+        previous_price: Option<MaterialPriceVersion>,
+        corrected_price: Option<MaterialPriceVersion>,
+    },
+    PurchaseOrder {
+        action: OrderAction,
+        order_id: Option<String>,
+        before: Option<OrderVersion>,
+        after: OrderProposal,
+    },
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

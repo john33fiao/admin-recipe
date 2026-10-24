@@ -1,12 +1,12 @@
 <script setup lang="ts">
-import type { BusinessDetail, DraftPriceV1 } from '~/types/business'
+import type { BusinessDetail, CatalogPricePayload, DraftPriceV1 } from '~/types/business'
 import type { BusinessEditorInitial } from '~/composables/useBusinessDraft'
 import type { Material } from '~/types/material'
 import { apiRequest } from '~/utils/api'
 import { displayDecimal } from '~/utils/catalog'
 import { validateBusinessDraft } from '~/utils/business'
 
-const props = defineProps<{ identity: string; initial: BusinessEditorInitial; refresh: () => Promise<BusinessDetail | null> }>()
+const props = defineProps<{ identity: string; initial: BusinessEditorInitial<CatalogPricePayload>; refresh: () => Promise<BusinessDetail | null> }>()
 const { payload, status, issues, preview, busy, failure, notice, storageFailure, created, pending, dirty, locked, canRetry, canReview, send, showPreview, review, resetNew, synchronizeTerminal } = useBusinessDraft(props.identity, props.initial, props.refresh)
 watch(() => props.initial, synchronizeTerminal, { immediate: true })
 const connection = useConnection()
@@ -92,7 +92,7 @@ async function reviewInput() { await review(); await nextTick(); form.value?.que
     <section v-if="preview" ref="previewPanel" class="business-preview" tabindex="-1" aria-labelledby="business-preview-title">
       <h2 id="business-preview-title">확정 전 미리보기</h2>
       <ul v-if="preview.issues.length" class="business-issues"><li v-for="issue in preview.issues" :key="`${issue.field}-${issue.code}`">{{ issue.message }}</li></ul>
-      <template v-if="preview.effect">
+      <template v-if="preview.effect?.kind === 'catalog_price'">
         <dl class="business-price-comparison">
           <div v-if="preview.effect.corrects_confirmation_id"><dt>정정 대상 가격</dt><dd>{{ preview.effect.corrected_price ? `${displayDecimal(preview.effect.corrected_price.amount)}원 / ${displayDecimal(preview.effect.corrected_price.quantity)}${preview.effect.corrected_price.unit}` : '대상 가격 확인 필요' }}</dd></div>
           <div><dt>현재 사전 가격</dt><dd>{{ preview.effect.previous_price ? `${displayDecimal(preview.effect.previous_price.amount)}원 / ${displayDecimal(preview.effect.previous_price.quantity)}${preview.effect.previous_price.unit}` : '가격 없음' }}</dd></div>

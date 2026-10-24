@@ -115,7 +115,7 @@ fn v2_migration_preserves_ids_requests_v1_bytes_and_unknown_origins() {
     assert_eq!(
         db.pragma_query_value::<i64, _>(None, "user_version", |r| r.get(0))
             .unwrap(),
-        4
+        5
     );
     assert_eq!(
         db.query_row("SELECT name FROM materials WHERE id=?1", [LEGACY_ID], |r| r

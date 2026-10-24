@@ -1,4 +1,7 @@
-use super::{Material, SCHEMA_VERSION, StoreError, business, catalog, read_materials, unavailable};
+use super::{
+    Material, SCHEMA_VERSION, StoreError, business, catalog, purchase_order, read_materials,
+    unavailable,
+};
 use crate::catalog::{CatalogState, MaterialPriceVersion, MaterialVersion};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
@@ -47,6 +50,51 @@ struct MutationRecord {
     response: String,
     epoch: String,
     sequence: String,
+}
+
+// Schema 4 predates purchase orders. Its reader must not inherit new live
+// payload variants when the application learns another business kind.
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum FrozenPriceKindV4 {
+    CatalogPrice,
+}
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FrozenRecordV4 {
+    id: String,
+    kind: FrozenPriceKindV4,
+    created_at: String,
+    created_sequence: String,
+    corrects_confirmation_id: Option<String>,
+}
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FrozenPriceDataV4 {
+    material_id: Option<String>,
+    material_version_id: Option<String>,
+    quantity: String,
+    unit: String,
+    amount: String,
+    note: String,
+}
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FrozenPayloadV4 {
+    kind: FrozenPriceKindV4,
+    version: u32,
+    data: FrozenPriceDataV4,
+}
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FrozenRevisionV4 {
+    id: String,
+    record_id: String,
+    previous_revision_id: Option<String>,
+    status: crate::business::BusinessStatus,
+    payload: FrozenPayloadV4,
+    recorded_at: String,
+    seq: String,
 }
 
 pub(super) fn read_catalog_state(
@@ -130,12 +178,42 @@ struct SnapshotStateV4 {
     catalog_state: CatalogState,
     creation_requests: Vec<LegacyRequest>,
     mutation_requests: Vec<MutationRecord>,
+    business_records: Vec<FrozenRecordV4>,
+    business_revisions: Vec<FrozenRevisionV4>,
+    business_heads: Vec<business::Head>,
+    business_confirmations: Vec<business::ConfirmationRow>,
+    business_catalog_price_results: Vec<business::PriceResult>,
+    business_corrections: Vec<crate::business::BusinessCorrection>,
+}
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SnapshotV2Schema5 {
+    format_version: u32,
+    schema_version: i64,
+    sequence: String,
+    request_id: String,
+    recorded_at: String,
+    state: SnapshotStateV5,
+}
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SnapshotStateV5 {
+    materials: Vec<Material>,
+    material_versions: Vec<MaterialVersion>,
+    material_heads: Vec<Head>,
+    material_prices: Vec<MaterialPriceVersion>,
+    catalog_state: CatalogState,
+    creation_requests: Vec<LegacyRequest>,
+    mutation_requests: Vec<MutationRecord>,
     business_records: Vec<business::Record>,
     business_revisions: Vec<crate::business::BusinessRevision>,
     business_heads: Vec<business::Head>,
     business_confirmations: Vec<business::ConfirmationRow>,
     business_catalog_price_results: Vec<business::PriceResult>,
     business_corrections: Vec<crate::business::BusinessCorrection>,
+    purchase_orders: Vec<purchase_order::OrderRecord>,
+    purchase_order_versions: Vec<crate::purchase_order::OrderVersion>,
+    purchase_order_heads: Vec<purchase_order::OrderHead>,
 }
 pub(super) fn encode(
     connection: &Connection,
@@ -145,7 +223,8 @@ pub(super) fn encode(
 ) -> Result<String, StoreError> {
     let old = read_catalog_state(connection)?;
     let rows = business::snapshot_rows(connection)?;
-    let state = SnapshotStateV4 {
+    let orders = purchase_order::order_snapshot_rows(connection)?;
+    let state = SnapshotStateV5 {
         materials: old.materials,
         material_versions: old.material_versions,
         material_heads: old.material_heads,
@@ -159,8 +238,11 @@ pub(super) fn encode(
         business_confirmations: rows.confirmations,
         business_catalog_price_results: rows.results,
         business_corrections: rows.corrections,
+        purchase_orders: orders.orders,
+        purchase_order_versions: orders.versions,
+        purchase_order_heads: orders.heads,
     };
-    let snapshot = SnapshotV2Schema4 {
+    let snapshot = SnapshotV2Schema5 {
         format_version: 2,
         schema_version: SCHEMA_VERSION,
         sequence: sequence.to_string(),
@@ -201,8 +283,22 @@ pub(super) fn validate_source(
         (Some(2), Some(4)) => {
             let current: SnapshotV2Schema4 = serde_json::from_str(payload).map_err(unavailable)?;
             for revision in &current.state.business_revisions {
+                let old = serde_json::from_value(
+                    serde_json::to_value(&revision.payload).map_err(unavailable)?,
+                )
+                .map_err(unavailable)?;
+                crate::business::normalize_business_payload(old).map_err(unavailable)?;
+            }
+            current.sequence == sequence.to_string()
+        }
+        (Some(2), Some(5)) => {
+            let current: SnapshotV2Schema5 = serde_json::from_str(payload).map_err(unavailable)?;
+            for revision in &current.state.business_revisions {
                 crate::business::normalize_business_payload(revision.payload.clone())
                     .map_err(unavailable)?;
+            }
+            for version in &current.state.purchase_order_versions {
+                purchase_order::validate_stored_version(version)?;
             }
             current.sequence == sequence.to_string()
         }

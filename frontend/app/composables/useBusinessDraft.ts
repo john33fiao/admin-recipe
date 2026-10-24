@@ -1,26 +1,32 @@
 import type { BusinessDetail, BusinessIssue, BusinessMutation, BusinessPayload, BusinessPending, BusinessPreview, BusinessStatus, BusinessSummary } from '~/types/business'
 import type { CatalogState } from '~/types/material'
 import { ApiError, apiRequest } from '~/utils/api'
-import { businessPending, confirmPending, copyPayload, restoreBusinessPending, samePayload, validateBusinessDraft } from '~/utils/business'
+import { businessPending, confirmPending, copyPayload, restoreBusinessPending, sameBusinessTarget, samePayload, validBusinessPayload } from '~/utils/business'
 import { failureAction } from '~/utils/catalog'
 
-export interface BusinessEditorInitial { payload: BusinessPayload; state: CatalogState; recordId: string | null; headId: string | null; status: BusinessStatus; corrects: string | null; issues: BusinessIssue[] }
+export interface BusinessEditorInitial<T extends BusinessPayload = BusinessPayload> { payload: T; state: CatalogState; recordId: string | null; headId: string | null; status: BusinessStatus; corrects: string | null; issues: BusinessIssue[] }
 
-export function useBusinessDraft(identity: string, initial: BusinessEditorInitial, refresh: () => Promise<BusinessDetail | null>) {
+export function useBusinessDraft<T extends BusinessPayload>(identity: string, initial: BusinessEditorInitial<T>, refresh: () => Promise<BusinessDetail | null>) {
   const key = `sunchang.business.${identity}`
   const pendingKey = `${key}.pending.v1`
   const draftKey = `${key}.draft.v1`
   const connection = useConnection()
-  const pending = useState<BusinessPending | null>(`${key}.pending`, () => { try { return restoreBusinessPending(sessionStorage.getItem(pendingKey)) } catch { return null } })
-  const stored = useState<{ payload: BusinessPayload; state: CatalogState; headId: string | null } | null>(`${key}.stored`, () => {
+  const pending = useState<BusinessPending | null>(`${key}.pending`, () => {
+    try {
+      const value = restoreBusinessPending(sessionStorage.getItem(pendingKey))
+      if (value && value.record_id === initial.recordId && (!('payload' in value.body) || sameBusinessTarget(initial.payload, value.body.payload))) return value
+    } catch { /* Invalid pending data cannot change the kind or target. */ }
+    return null
+  })
+  const stored = useState<{ payload: T; state: CatalogState; headId: string | null } | null>(`${key}.stored`, () => {
     try {
       const value = JSON.parse(sessionStorage.getItem(draftKey) ?? 'null')
-      if (value?.payload?.kind === 'catalog_price' && value.payload.version === 1 && Object.keys(validateBusinessDraft(value.payload)).length === 0 && typeof value.state?.epoch === 'string' && typeof value.state?.revision === 'string' && (value.headId === null || typeof value.headId === 'string')) return value
+      if (validBusinessPayload(value?.payload) && sameBusinessTarget(initial.payload, value.payload) && typeof value.state?.epoch === 'string' && typeof value.state?.revision === 'string' && (value.headId === null || typeof value.headId === 'string')) return value
     } catch { /* Malformed tab content is not a write request. */ }
     return null
   })
-  const payload = useState<BusinessPayload>(`${key}.payload`, () => pending.value && 'payload' in pending.value.body ? copyPayload(pending.value.body.payload) : copyPayload(stored.value?.payload ?? initial.payload))
-  const baseline = useState<BusinessPayload>(`${key}.baseline`, () => copyPayload(initial.payload))
+  const payload = useState<T>(`${key}.payload`, () => pending.value && 'payload' in pending.value.body ? copyPayload(pending.value.body.payload) as T : copyPayload(stored.value?.payload ?? initial.payload))
+  const baseline = useState<T>(`${key}.baseline`, () => copyPayload(initial.payload))
   const basis = useState<CatalogState>(`${key}.basis`, () => pending.value ? { epoch: pending.value.body.meta.epoch, revision: pending.value.body.meta.expected_revision } : stored.value?.state ?? initial.state)
   const headId = useState<string | null>(`${key}.head`, () => pending.value && 'expected_head_id' in pending.value.body ? pending.value.body.expected_head_id : stored.value?.headId ?? initial.headId)
   const status = useState<BusinessStatus>(`${key}.status`, () => initial.status)
@@ -41,7 +47,7 @@ export function useBusinessDraft(identity: string, initial: BusinessEditorInitia
   let mounted = true
   onScopeDispose(() => { mounted = false })
 
-  function synchronizeTerminal(latest: BusinessEditorInitial) {
+  function synchronizeTerminal(latest: BusinessEditorInitial<T>) {
     if (latest.status === 'draft' || pending.value || busy.value) return
     status.value = latest.status
     baseline.value = copyPayload(latest.payload)
@@ -99,8 +105,9 @@ export function useBusinessDraft(identity: string, initial: BusinessEditorInitia
         payload.value = copyPayload(initial.payload)
         baseline.value = copyPayload(initial.payload)
       } else {
-        payload.value = copyPayload(response.result.head.payload)
-        baseline.value = copyPayload(response.result.head.payload)
+        // The server keeps a stored record's kind/action/target immutable.
+        payload.value = copyPayload(response.result.head.payload) as T
+        baseline.value = copyPayload(response.result.head.payload) as T
         headId.value = response.result.head.id
         status.value = response.result.head.status
       }
@@ -108,7 +115,9 @@ export function useBusinessDraft(identity: string, initial: BusinessEditorInitia
       pending.value = null
       preview.value = null
       recovery.value = ''
-      notice.value = { create: '초안을 임시 저장했습니다. 앱을 다시 열어도 이어서 작성할 수 있습니다.', revise: '수정 내용을 임시 저장했습니다.', confirm: '가격을 확정했습니다. 확정 기록과 가격을 함께 보관했습니다.', archive: '초안을 보관했습니다. 이전 입력은 이력에 남아 있습니다.' }[request.action]
+      const confirmedPayload = response.result.head.payload
+      const confirmed = confirmedPayload.kind === 'catalog_price' ? '가격을 확정했습니다. 확정 기록과 가격을 함께 보관했습니다.' : { place: '주문을 확정했습니다. 미입고 내역에서 확인할 수 있습니다.', revise: '주문 수정을 확정했습니다. 이전 주문 내용은 이력에 남아 있습니다.', cancel: '주문 취소를 확정했습니다. 보유 수량과 가격은 바뀌지 않았습니다.' }[confirmedPayload.data.action]
+      notice.value = { create: '초안을 임시 저장했습니다. 앱을 다시 열어도 이어서 작성할 수 있습니다.', revise: '수정 내용을 임시 저장했습니다.', confirm: confirmed, archive: '초안을 보관했습니다. 이전 입력은 이력에 남아 있습니다.' }[request.action]
       completed.value += 1
       return response
     } catch (error) { failed(error); return null }
@@ -140,7 +149,7 @@ export function useBusinessDraft(identity: string, initial: BusinessEditorInitia
       if (!state || pending.value?.body.meta.request_id !== requestId) return false
       sessionStorage.removeItem(pendingKey)
       basis.value = state
-      if (latest) { headId.value = latest.head.id; status.value = latest.head.status; baseline.value = copyPayload(latest.head.payload); issues.value = latest.issues }
+      if (latest) { headId.value = latest.head.id; status.value = latest.head.status; baseline.value = copyPayload(latest.head.payload) as T; issues.value = latest.issues }
       pending.value = null
       recovery.value = ''
       failure.value = ''

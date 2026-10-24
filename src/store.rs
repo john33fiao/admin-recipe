@@ -14,9 +14,10 @@ use uuid::Uuid;
 mod business;
 mod catalog;
 mod mutation;
+mod purchase_order;
 mod snapshot;
 
-const SCHEMA_VERSION: i64 = 4;
+const SCHEMA_VERSION: i64 = 5;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Material {
@@ -296,6 +297,7 @@ fn validate_schema(connection: &Connection) -> anyhow::Result<()> {
         .prepare("SELECT request_id, name, unit, material_id FROM creation_requests LIMIT 0")?;
     catalog::validate_catalog_schema(connection)?;
     business::validate_business_schema(connection)?;
+    purchase_order::validate_order_schema(connection)?;
     let violation: Option<String> = connection
         .query_row("PRAGMA foreign_key_check", [], |row| row.get(0))
         .optional()?;
@@ -361,6 +363,10 @@ fn migrate(connection: &mut Connection, starting_version: i64) -> anyhow::Result
     }
     if version == 3 {
         business::migrate_business(&transaction)?;
+        version = 4;
+    }
+    if version == 4 {
+        purchase_order::migrate_orders(&transaction)?;
     }
     validate_schema(&transaction)?;
     transaction.commit()?;

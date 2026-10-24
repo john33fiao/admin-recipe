@@ -8,6 +8,7 @@ use crate::{
         ReviseCatalogMaterial,
     },
     lifecycle::{Lifecycle, Policy},
+    purchase_order::OrderFilter,
     store::{CreateMaterial, Store, StoreError},
 };
 use axum::{
@@ -199,6 +200,8 @@ pub fn router(state: AppState) -> Router {
         .route("/api/business/{id}/preview", post(business_preview))
         .route("/api/business/{id}/confirm", post(business_confirm))
         .route("/api/business/{id}/archive", post(business_archive))
+        .route("/api/orders", get(order_list))
+        .route("/api/orders/{id}", get(order_detail))
         .route("/api/heartbeat", get(heartbeat))
         .fallback(static_asset)
         .layer(DefaultBodyLimit::max(16 * 1024))
@@ -485,6 +488,32 @@ async fn business_archive(
     ))
 }
 
+async fn order_list(
+    State(state): State<AppState>,
+    input: Result<Query<OrderFilter>, QueryRejection>,
+) -> Result<impl IntoResponse, ApiError> {
+    let Query(filter) = input
+        .map_err(|error| ApiError(StatusCode::BAD_REQUEST, error.body_text(), "validation"))?;
+    Ok(Json(state.with_store(move |s| s.order_list(filter)).await?))
+}
+
+async fn order_detail(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<impl IntoResponse, ApiError> {
+    let detail = state
+        .with_store(move |s| s.order_detail(&id))
+        .await?
+        .ok_or_else(|| {
+            ApiError(
+                StatusCode::NOT_FOUND,
+                "주문 내역을 찾을 수 없습니다.".into(),
+                "not_found",
+            )
+        })?;
+    Ok(Json(detail))
+}
+
 struct SocketGuard(AppState);
 impl Drop for SocketGuard {
     fn drop(&mut self) {
@@ -549,11 +578,15 @@ async fn static_asset(_headers: HeaderMap, request: Request<Body>) -> Response {
         || path == "/overview"
         || path == "/materials"
         || path == "/business"
+        || path == "/orders"
         || path
             .strip_prefix("/materials/")
             .is_some_and(|id| uuid::Uuid::parse_str(id).is_ok())
         || path
             .strip_prefix("/business/")
+            .is_some_and(|id| uuid::Uuid::parse_str(id).is_ok())
+        || path
+            .strip_prefix("/orders/")
             .is_some_and(|id| uuid::Uuid::parse_str(id).is_ok());
     let asset_path = if spa_route {
         "index.html"

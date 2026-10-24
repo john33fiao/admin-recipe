@@ -109,3 +109,34 @@ test('stale review is exclusive and terminal server input remains distinct from 
     assert.equal(next.pending.value, null)
   } finally { nextScope.stop() }
 })
+
+test('order actions reuse immutable preview retry and share completion across navigation', async () => {
+  for (const action of ['place', 'revise', 'cancel']) {
+    const h = harness()
+    const fields = { material_version_id: headId, quantity: '12', unit: 'kg', supplier: '', expected_date: '', estimated_amount: '0', note: '' }
+    const orderPayload = { kind: 'purchase_order', version: 1, data: action === 'place' ? { action, material_id: recordId, ...fields } : action === 'revise' ? { action, order_id: recordId, expected_order_version_id: headId, ...fields } : { action, order_id: recordId, expected_order_version_id: headId, note: '' } }
+    const seed = { ...initial, payload: orderPayload }
+    const firstScope = vue.effectScope()
+    const first = firstScope.run(() => h.create(recordId, seed, async () => null))!
+    const showing = first.showPreview()
+    h.requests[0]!.resolve({ record_id: recordId, head_id: headId, state: { epoch, revision: '9' }, can_confirm: true, issues: [], effect: { kind: 'purchase_order', action, before: null, after: {} } })
+    await showing
+    const sending = first.send('confirm')
+    const original = JSON.stringify(h.requests[1]!.body)
+    h.requests[1]!.reject(new ApiError(503, 'uncertain', 'unavailable'))
+    await sending
+    firstScope.stop()
+    const nextScope = vue.effectScope()
+    try {
+      const next = nextScope.run(() => h.create(recordId, seed, async () => null))!
+      const retry = next.send('confirm')
+      assert.equal(JSON.stringify(h.requests[2]!.body), original)
+      h.requests[2]!.resolve({ result: { item: { ...item, kind: 'purchase_order', status: 'confirmed' }, head: { ...head, payload: orderPayload, status: 'confirmed' }, issues: [] }, state: { epoch, revision: '10' } })
+      await retry
+      assert.equal(next.status.value, 'confirmed')
+      assert.equal(next.pending.value, null)
+      assert.equal(next.dirty.value, false)
+      assert.equal(h.storage.has(`sunchang.business.${recordId}.pending.v1`), false)
+    } finally { nextScope.stop() }
+  }
+})

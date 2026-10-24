@@ -1,0 +1,254 @@
+{
+  "format_version": 2,
+  "schema_version": 4,
+  "sequence": "5",
+  "request_id": "defd0520-5c9f-443a-8379-c86b660e578d",
+  "recorded_at": "2026-10-24T12:48:37.085Z",
+  "state": {
+    "materials": [
+      {
+        "id": "2589dd8e-5026-4f97-897c-ae046c15a4b2",
+        "name": "가상 이전 가격 재료",
+        "unit": "g",
+        "created_at": "2026-10-24T12:48:36.946Z"
+      }
+    ],
+    "material_versions": [
+      {
+        "id": "0a392cc4-ff12-4e38-a7c8-ff0168285061",
+        "material_id": "2589dd8e-5026-4f97-897c-ae046c15a4b2",
+        "name": "가상 이전 가격 재료",
+        "unit": "g",
+        "canonical_unit": "g",
+        "dimension": "mass",
+        "kind": "raw",
+        "description": "형식 보존 검증용",
+        "archived": false,
+        "recorded_at": "2026-10-24T12:48:36.946Z",
+        "seq": "1",
+        "source": "catalog"
+      }
+    ],
+    "material_heads": [
+      {
+        "material_id": "2589dd8e-5026-4f97-897c-ae046c15a4b2",
+        "current_version_id": "0a392cc4-ff12-4e38-a7c8-ff0168285061"
+      }
+    ],
+    "material_prices": [
+      {
+        "id": "d8c2836a-6b6b-4b49-81eb-dbfc06f4d928",
+        "material_id": "2589dd8e-5026-4f97-897c-ae046c15a4b2",
+        "material_version_id": "0a392cc4-ff12-4e38-a7c8-ff0168285061",
+        "quantity": "1000",
+        "amount": "10",
+        "unit": "g",
+        "input_quantity": "1",
+        "input_unit": "kg",
+        "recorded_at": "2026-10-24T12:48:37.007Z",
+        "seq": "3"
+      },
+      {
+        "id": "86953cc1-321f-477f-bdd9-df68917ce95f",
+        "material_id": "2589dd8e-5026-4f97-897c-ae046c15a4b2",
+        "material_version_id": "0a392cc4-ff12-4e38-a7c8-ff0168285061",
+        "quantity": "1000",
+        "amount": "30",
+        "unit": "g",
+        "input_quantity": "1",
+        "input_unit": "kg",
+        "recorded_at": "2026-10-24T12:48:37.085Z",
+        "seq": "5"
+      }
+    ],
+    "catalog_state": {
+      "epoch": "c14d6897-0c1a-4f38-9b3b-5d8e6dd970c7",
+      "revision": "5"
+    },
+    "creation_requests": [],
+    "mutation_requests": [
+      {
+        "request_id": "ec3f1dc9-2aa6-4d8e-beaa-4b25249b61b6",
+        "operation": "material.create",
+        "payload": "{\"request_id\":\"ec3f1dc9-2aa6-4d8e-beaa-4b25249b61b6\",\"epoch\":\"c14d6897-0c1a-4f38-9b3b-5d8e6dd970c7\",\"expected_revision\":\"0\",\"name\":\"가상 이전 가격 재료\",\"unit\":\"g\",\"kind\":\"raw\",\"description\":\"형식 보존 검증용\"}",
+        "response": "{\"id\":\"2589dd8e-5026-4f97-897c-ae046c15a4b2\",\"version_id\":\"0a392cc4-ff12-4e38-a7c8-ff0168285061\",\"name\":\"가상 이전 가격 재료\",\"unit\":\"g\",\"canonical_unit\":\"g\",\"dimension\":\"mass\",\"kind\":\"raw\",\"description\":\"형식 보존 검증용\",\"archived\":false,\"created_at\":\"2026-10-24T12:48:36.946Z\",\"updated_at\":\"2026-10-24T12:48:36.946Z\",\"price\":{\"source\":\"missing\",\"source_id\":null,\"amount\":null,\"quantity\":null,\"reason\":\"등록한 가격이 없습니다\"},\"epoch\":\"c14d6897-0c1a-4f38-9b3b-5d8e6dd970c7\",\"revision\":\"1\"}",
+        "epoch": "c14d6897-0c1a-4f38-9b3b-5d8e6dd970c7",
+        "sequence": "1"
+      },
+      {
+        "request_id": "6deb32c0-f79f-4931-90bf-2dc7e7a0cfac",
+        "operation": "business.create",
+        "payload": "{\"meta\":{\"request_id\":\"6deb32c0-f79f-4931-90bf-2dc7e7a0cfac\",\"epoch\":\"c14d6897-0c1a-4f38-9b3b-5d8e6dd970c7\",\"expected_revision\":\"1\"},\"payload\":{\"kind\":\"catalog_price\",\"version\":1,\"data\":{\"material_id\":\"2589dd8e-5026-4f97-897c-ae046c15a4b2\",\"material_version_id\":\"0a392cc4-ff12-4e38-a7c8-ff0168285061\",\"quantity\":\"1\",\"unit\":\"kg\",\"amount\":\"10\",\"note\":\"\"}},\"corrects_confirmation_id\":null}",
+        "response": "{\"result\":{\"item\":{\"id\":\"cb622ee9-7d1a-44b7-a0eb-fe902c99f4f5\",\"kind\":\"catalog_price\",\"head_id\":\"fd9eb3af-68bb-48c5-89b1-33a998446b4c\",\"status\":\"draft\",\"created_at\":\"2026-10-24T12:48:36.976Z\",\"updated_at\":\"2026-10-24T12:48:36.976Z\",\"corrects_confirmation_id\":null,\"confirmation_id\":null,\"effective_confirmation_id\":null,\"issue_count\":0,\"material_name\":\"가상 이전 가격 재료\"},\"head\":{\"id\":\"fd9eb3af-68bb-48c5-89b1-33a998446b4c\",\"record_id\":\"cb622ee9-7d1a-44b7-a0eb-fe902c99f4f5\",\"previous_revision_id\":null,\"status\":\"draft\",\"payload\":{\"kind\":\"catalog_price\",\"version\":1,\"data\":{\"material_id\":\"2589dd8e-5026-4f97-897c-ae046c15a4b2\",\"material_version_id\":\"0a392cc4-ff12-4e38-a7c8-ff0168285061\",\"quantity\":\"1\",\"unit\":\"kg\",\"amount\":\"10\",\"note\":\"\"}},\"recorded_at\":\"2026-10-24T12:48:36.976Z\",\"seq\":\"2\"},\"confirmation\":null,\"issues\":[]},\"state\":{\"epoch\":\"c14d6897-0c1a-4f38-9b3b-5d8e6dd970c7\",\"revision\":\"2\"}}",
+        "epoch": "c14d6897-0c1a-4f38-9b3b-5d8e6dd970c7",
+        "sequence": "2"
+      },
+      {
+        "request_id": "e4ed39ce-150c-4958-bb70-64bd1d6b42d2",
+        "operation": "business.confirm",
+        "payload": "[\"cb622ee9-7d1a-44b7-a0eb-fe902c99f4f5\",{\"meta\":{\"request_id\":\"e4ed39ce-150c-4958-bb70-64bd1d6b42d2\",\"epoch\":\"c14d6897-0c1a-4f38-9b3b-5d8e6dd970c7\",\"expected_revision\":\"2\"},\"expected_head_id\":\"fd9eb3af-68bb-48c5-89b1-33a998446b4c\"}]",
+        "response": "{\"result\":{\"item\":{\"id\":\"cb622ee9-7d1a-44b7-a0eb-fe902c99f4f5\",\"kind\":\"catalog_price\",\"head_id\":\"30055d4e-3231-41c0-8ecd-8909bb23d340\",\"status\":\"confirmed\",\"created_at\":\"2026-10-24T12:48:36.976Z\",\"updated_at\":\"2026-10-24T12:48:37.007Z\",\"corrects_confirmation_id\":null,\"confirmation_id\":\"03b64304-3cca-4af5-9aac-2ed9b8122ae3\",\"effective_confirmation_id\":\"03b64304-3cca-4af5-9aac-2ed9b8122ae3\",\"issue_count\":0,\"material_name\":\"가상 이전 가격 재료\"},\"head\":{\"id\":\"30055d4e-3231-41c0-8ecd-8909bb23d340\",\"record_id\":\"cb622ee9-7d1a-44b7-a0eb-fe902c99f4f5\",\"previous_revision_id\":\"fd9eb3af-68bb-48c5-89b1-33a998446b4c\",\"status\":\"confirmed\",\"payload\":{\"kind\":\"catalog_price\",\"version\":1,\"data\":{\"material_id\":\"2589dd8e-5026-4f97-897c-ae046c15a4b2\",\"material_version_id\":\"0a392cc4-ff12-4e38-a7c8-ff0168285061\",\"quantity\":\"1\",\"unit\":\"kg\",\"amount\":\"10\",\"note\":\"\"}},\"recorded_at\":\"2026-10-24T12:48:37.007Z\",\"seq\":\"3\"},\"confirmation\":{\"id\":\"03b64304-3cca-4af5-9aac-2ed9b8122ae3\",\"record_id\":\"cb622ee9-7d1a-44b7-a0eb-fe902c99f4f5\",\"revision_id\":\"30055d4e-3231-41c0-8ecd-8909bb23d340\",\"request_id\":\"e4ed39ce-150c-4958-bb70-64bd1d6b42d2\",\"recorded_at\":\"2026-10-24T12:48:37.007Z\",\"seq\":\"3\",\"result\":{\"kind\":\"catalog_price\",\"price_id\":\"d8c2836a-6b6b-4b49-81eb-dbfc06f4d928\",\"material_id\":\"2589dd8e-5026-4f97-897c-ae046c15a4b2\",\"material_version_id\":\"0a392cc4-ff12-4e38-a7c8-ff0168285061\"}},\"issues\":[]},\"state\":{\"epoch\":\"c14d6897-0c1a-4f38-9b3b-5d8e6dd970c7\",\"revision\":\"3\"}}",
+        "epoch": "c14d6897-0c1a-4f38-9b3b-5d8e6dd970c7",
+        "sequence": "3"
+      },
+      {
+        "request_id": "ebd82fcb-dc07-4c7b-a6b7-2bbdcac160e8",
+        "operation": "business.create",
+        "payload": "{\"meta\":{\"request_id\":\"ebd82fcb-dc07-4c7b-a6b7-2bbdcac160e8\",\"epoch\":\"c14d6897-0c1a-4f38-9b3b-5d8e6dd970c7\",\"expected_revision\":\"3\"},\"payload\":{\"kind\":\"catalog_price\",\"version\":1,\"data\":{\"material_id\":\"2589dd8e-5026-4f97-897c-ae046c15a4b2\",\"material_version_id\":\"0a392cc4-ff12-4e38-a7c8-ff0168285061\",\"quantity\":\"1\",\"unit\":\"kg\",\"amount\":\"30\",\"note\":\"가상 이전 금액 정정\"}},\"corrects_confirmation_id\":\"03b64304-3cca-4af5-9aac-2ed9b8122ae3\"}",
+        "response": "{\"result\":{\"item\":{\"id\":\"48cfec56-b857-4d04-a4af-17b16345a0a2\",\"kind\":\"catalog_price\",\"head_id\":\"015584a6-6137-4ca7-9834-5669423f573e\",\"status\":\"draft\",\"created_at\":\"2026-10-24T12:48:37.052Z\",\"updated_at\":\"2026-10-24T12:48:37.052Z\",\"corrects_confirmation_id\":\"03b64304-3cca-4af5-9aac-2ed9b8122ae3\",\"confirmation_id\":null,\"effective_confirmation_id\":\"03b64304-3cca-4af5-9aac-2ed9b8122ae3\",\"issue_count\":0,\"material_name\":\"가상 이전 가격 재료\"},\"head\":{\"id\":\"015584a6-6137-4ca7-9834-5669423f573e\",\"record_id\":\"48cfec56-b857-4d04-a4af-17b16345a0a2\",\"previous_revision_id\":null,\"status\":\"draft\",\"payload\":{\"kind\":\"catalog_price\",\"version\":1,\"data\":{\"material_id\":\"2589dd8e-5026-4f97-897c-ae046c15a4b2\",\"material_version_id\":\"0a392cc4-ff12-4e38-a7c8-ff0168285061\",\"quantity\":\"1\",\"unit\":\"kg\",\"amount\":\"30\",\"note\":\"가상 이전 금액 정정\"}},\"recorded_at\":\"2026-10-24T12:48:37.052Z\",\"seq\":\"4\"},\"confirmation\":null,\"issues\":[]},\"state\":{\"epoch\":\"c14d6897-0c1a-4f38-9b3b-5d8e6dd970c7\",\"revision\":\"4\"}}",
+        "epoch": "c14d6897-0c1a-4f38-9b3b-5d8e6dd970c7",
+        "sequence": "4"
+      },
+      {
+        "request_id": "defd0520-5c9f-443a-8379-c86b660e578d",
+        "operation": "business.confirm",
+        "payload": "[\"48cfec56-b857-4d04-a4af-17b16345a0a2\",{\"meta\":{\"request_id\":\"defd0520-5c9f-443a-8379-c86b660e578d\",\"epoch\":\"c14d6897-0c1a-4f38-9b3b-5d8e6dd970c7\",\"expected_revision\":\"4\"},\"expected_head_id\":\"015584a6-6137-4ca7-9834-5669423f573e\"}]",
+        "response": "{\"result\":{\"item\":{\"id\":\"48cfec56-b857-4d04-a4af-17b16345a0a2\",\"kind\":\"catalog_price\",\"head_id\":\"1c715cb8-2e2f-4cc5-9a75-12753642912e\",\"status\":\"confirmed\",\"created_at\":\"2026-10-24T12:48:37.052Z\",\"updated_at\":\"2026-10-24T12:48:37.085Z\",\"corrects_confirmation_id\":\"03b64304-3cca-4af5-9aac-2ed9b8122ae3\",\"confirmation_id\":\"85c27d33-b438-47f0-9520-59fefd1d84f2\",\"effective_confirmation_id\":\"85c27d33-b438-47f0-9520-59fefd1d84f2\",\"issue_count\":0,\"material_name\":\"가상 이전 가격 재료\"},\"head\":{\"id\":\"1c715cb8-2e2f-4cc5-9a75-12753642912e\",\"record_id\":\"48cfec56-b857-4d04-a4af-17b16345a0a2\",\"previous_revision_id\":\"015584a6-6137-4ca7-9834-5669423f573e\",\"status\":\"confirmed\",\"payload\":{\"kind\":\"catalog_price\",\"version\":1,\"data\":{\"material_id\":\"2589dd8e-5026-4f97-897c-ae046c15a4b2\",\"material_version_id\":\"0a392cc4-ff12-4e38-a7c8-ff0168285061\",\"quantity\":\"1\",\"unit\":\"kg\",\"amount\":\"30\",\"note\":\"가상 이전 금액 정정\"}},\"recorded_at\":\"2026-10-24T12:48:37.085Z\",\"seq\":\"5\"},\"confirmation\":{\"id\":\"85c27d33-b438-47f0-9520-59fefd1d84f2\",\"record_id\":\"48cfec56-b857-4d04-a4af-17b16345a0a2\",\"revision_id\":\"1c715cb8-2e2f-4cc5-9a75-12753642912e\",\"request_id\":\"defd0520-5c9f-443a-8379-c86b660e578d\",\"recorded_at\":\"2026-10-24T12:48:37.085Z\",\"seq\":\"5\",\"result\":{\"kind\":\"catalog_price\",\"price_id\":\"86953cc1-321f-477f-bdd9-df68917ce95f\",\"material_id\":\"2589dd8e-5026-4f97-897c-ae046c15a4b2\",\"material_version_id\":\"0a392cc4-ff12-4e38-a7c8-ff0168285061\"}},\"issues\":[]},\"state\":{\"epoch\":\"c14d6897-0c1a-4f38-9b3b-5d8e6dd970c7\",\"revision\":\"5\"}}",
+        "epoch": "c14d6897-0c1a-4f38-9b3b-5d8e6dd970c7",
+        "sequence": "5"
+      }
+    ],
+    "business_records": [
+      {
+        "id": "cb622ee9-7d1a-44b7-a0eb-fe902c99f4f5",
+        "kind": "catalog_price",
+        "created_at": "2026-10-24T12:48:36.976Z",
+        "created_sequence": "2",
+        "corrects_confirmation_id": null
+      },
+      {
+        "id": "48cfec56-b857-4d04-a4af-17b16345a0a2",
+        "kind": "catalog_price",
+        "created_at": "2026-10-24T12:48:37.052Z",
+        "created_sequence": "4",
+        "corrects_confirmation_id": "03b64304-3cca-4af5-9aac-2ed9b8122ae3"
+      }
+    ],
+    "business_revisions": [
+      {
+        "id": "fd9eb3af-68bb-48c5-89b1-33a998446b4c",
+        "record_id": "cb622ee9-7d1a-44b7-a0eb-fe902c99f4f5",
+        "previous_revision_id": null,
+        "status": "draft",
+        "payload": {
+          "kind": "catalog_price",
+          "version": 1,
+          "data": {
+            "material_id": "2589dd8e-5026-4f97-897c-ae046c15a4b2",
+            "material_version_id": "0a392cc4-ff12-4e38-a7c8-ff0168285061",
+            "quantity": "1",
+            "unit": "kg",
+            "amount": "10",
+            "note": ""
+          }
+        },
+        "recorded_at": "2026-10-24T12:48:36.976Z",
+        "seq": "2"
+      },
+      {
+        "id": "30055d4e-3231-41c0-8ecd-8909bb23d340",
+        "record_id": "cb622ee9-7d1a-44b7-a0eb-fe902c99f4f5",
+        "previous_revision_id": "fd9eb3af-68bb-48c5-89b1-33a998446b4c",
+        "status": "confirmed",
+        "payload": {
+          "kind": "catalog_price",
+          "version": 1,
+          "data": {
+            "material_id": "2589dd8e-5026-4f97-897c-ae046c15a4b2",
+            "material_version_id": "0a392cc4-ff12-4e38-a7c8-ff0168285061",
+            "quantity": "1",
+            "unit": "kg",
+            "amount": "10",
+            "note": ""
+          }
+        },
+        "recorded_at": "2026-10-24T12:48:37.007Z",
+        "seq": "3"
+      },
+      {
+        "id": "015584a6-6137-4ca7-9834-5669423f573e",
+        "record_id": "48cfec56-b857-4d04-a4af-17b16345a0a2",
+        "previous_revision_id": null,
+        "status": "draft",
+        "payload": {
+          "kind": "catalog_price",
+          "version": 1,
+          "data": {
+            "material_id": "2589dd8e-5026-4f97-897c-ae046c15a4b2",
+            "material_version_id": "0a392cc4-ff12-4e38-a7c8-ff0168285061",
+            "quantity": "1",
+            "unit": "kg",
+            "amount": "30",
+            "note": "가상 이전 금액 정정"
+          }
+        },
+        "recorded_at": "2026-10-24T12:48:37.052Z",
+        "seq": "4"
+      },
+      {
+        "id": "1c715cb8-2e2f-4cc5-9a75-12753642912e",
+        "record_id": "48cfec56-b857-4d04-a4af-17b16345a0a2",
+        "previous_revision_id": "015584a6-6137-4ca7-9834-5669423f573e",
+        "status": "confirmed",
+        "payload": {
+          "kind": "catalog_price",
+          "version": 1,
+          "data": {
+            "material_id": "2589dd8e-5026-4f97-897c-ae046c15a4b2",
+            "material_version_id": "0a392cc4-ff12-4e38-a7c8-ff0168285061",
+            "quantity": "1",
+            "unit": "kg",
+            "amount": "30",
+            "note": "가상 이전 금액 정정"
+          }
+        },
+        "recorded_at": "2026-10-24T12:48:37.085Z",
+        "seq": "5"
+      }
+    ],
+    "business_heads": [
+      {
+        "record_id": "48cfec56-b857-4d04-a4af-17b16345a0a2",
+        "current_revision_id": "1c715cb8-2e2f-4cc5-9a75-12753642912e"
+      },
+      {
+        "record_id": "cb622ee9-7d1a-44b7-a0eb-fe902c99f4f5",
+        "current_revision_id": "30055d4e-3231-41c0-8ecd-8909bb23d340"
+      }
+    ],
+    "business_confirmations": [
+      {
+        "id": "03b64304-3cca-4af5-9aac-2ed9b8122ae3",
+        "record_id": "cb622ee9-7d1a-44b7-a0eb-fe902c99f4f5",
+        "revision_id": "30055d4e-3231-41c0-8ecd-8909bb23d340",
+        "request_id": "e4ed39ce-150c-4958-bb70-64bd1d6b42d2",
+        "recorded_at": "2026-10-24T12:48:37.007Z",
+        "seq": "3"
+      },
+      {
+        "id": "85c27d33-b438-47f0-9520-59fefd1d84f2",
+        "record_id": "48cfec56-b857-4d04-a4af-17b16345a0a2",
+        "revision_id": "1c715cb8-2e2f-4cc5-9a75-12753642912e",
+        "request_id": "defd0520-5c9f-443a-8379-c86b660e578d",
+        "recorded_at": "2026-10-24T12:48:37.085Z",
+        "seq": "5"
+      }
+    ],
+    "business_catalog_price_results": [
+      {
+        "confirmation_id": "03b64304-3cca-4af5-9aac-2ed9b8122ae3",
+        "price_id": "d8c2836a-6b6b-4b49-81eb-dbfc06f4d928"
+      },
+      {
+        "confirmation_id": "85c27d33-b438-47f0-9520-59fefd1d84f2",
+        "price_id": "86953cc1-321f-477f-bdd9-df68917ce95f"
+      }
+    ],
+    "business_corrections": [
+      {
+        "target_confirmation_id": "03b64304-3cca-4af5-9aac-2ed9b8122ae3",
+        "replacement_confirmation_id": "85c27d33-b438-47f0-9520-59fefd1d84f2"
+      }
+    ]
+  }
+}
