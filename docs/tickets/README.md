@@ -1,13 +1,14 @@
 # 작업 티켓
 
-모든 활성 요구를 아래 티켓에 연결했다. T-001은 기존 구현·검증 티켓이고 T-002~T-030은 2026-10-24에 요구사항을 전환한 신규 티켓이다. 신규 티켓의 기능은 아직 구현하지 않았다.
+모든 활성 요구를 아래 티켓에 연결했다. T-001은 기존 구현·검증 티켓이고 T-002~T-030은 2026-10-24에 요구사항을 전환한 신규 티켓이다. T-002의 설계·독립 검토를 완료했으며 후속 기능 구현과 구분한다.
 
 ## 상태와 실행 순서
 
 - **착수 가능:** 미완료 선행 티켓이 없는 1차 작업. 구현 전 관련 설계를 확인한다.
 - **대기:** 선행 완료 후 수행한다. 작성된 티켓을 기능 완료로 간주하지 않는다.
 - **2차·백로그·후속 검토:** 범위 보존/구체화 작업이다. 1차 실행 목록에 자동 포함하지 않는다. 각 티켓의 남은 결정이 구체화되면 구현 작업을 나눈다.
-- **진행 중:** 기존 구현과 미검증이 함께 있는 T-001.
+- **진행 중:** 구현·검증을 수행하고 있거나 필수 미검증이 남은 작업.
+- **완료:** 해당 티켓의 수용 기준·검증·변경 전후 검토를 완료한 상태. 설계 티켓 완료는 제품 기능 완료가 아니다.
 
 1차 순차 실행안: [T-002](T-002-domain-contract.md) → [T-020](T-020-ui-foundation.md) → [T-003](T-003-materials-and-units.md) → [T-005](T-005-business-history.md) → [T-006](T-006-purchase-orders.md) → [T-007](T-007-receipts.md) → [T-004](T-004-recipes-and-costs.md) → [T-008](T-008-production.md) → [T-009](T-009-sales-consumption.md) → [T-010](T-010-stocktake-and-waste.md) → [T-011](T-011-late-receipt-reconciliation.md) → [T-012](T-012-corrections-and-versions.md) → [T-013](T-013-purchase-returns.md) → [T-014](T-014-closing-workspace.md) → [T-015](T-015-photos-and-suppliers.md) → [T-016](T-016-statistics-and-history.md) → [T-017](T-017-operations-overview.md) → [T-018](T-018-full-state-restore.md) → [T-019](T-019-data-compatibility.md) → [T-021](T-021-first-release-verification.md).
 
@@ -16,7 +17,7 @@ T-002는 계산·데이터 계약, T-020은 공통 UI 기반으로 서로 독립
 | 티켓 | 단계·현재 상태 | 선행 |
 | --- | --- | --- |
 | [T-001: Rust·Nuxt 휴대 실행 검증과 첫 저장 흐름](T-001-portable-local-app.md) | 진행 중 — 실환경 미검증 유지 | 없음 |
-| [T-002: 수량·원가와 소모 보정 계산 계약](T-002-domain-contract.md) | 1차 · 착수 가능 | 없음 |
+| [T-002: 수량·원가와 소모 보정 계산 계약](T-002-domain-contract.md) | 1차 · 설계 완료 — 독립 검토 통과 | 없음 |
 | [T-003: 재료·상태·단위와 사전 가격 관리](T-003-materials-and-units.md) | 1차 · 대기 | [T-002](T-002-domain-contract.md), [T-020](T-020-ui-foundation.md) |
 | [T-004: 레시피·메뉴 복제와 사전 원가 계산](T-004-recipes-and-costs.md) | 1차 · 대기 | [T-003](T-003-materials-and-units.md), [T-005](T-005-business-history.md) |
 | [T-005: 업무 기록·임시 저장·확정과 JSON 기록 확장](T-005-business-history.md) | 1차 · 대기 | [T-002](T-002-domain-contract.md), [T-003](T-003-materials-and-units.md) |
