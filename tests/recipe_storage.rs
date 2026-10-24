@@ -183,7 +183,7 @@ fn schema_six_open_adds_empty_recipe_relations_without_rewriting_retained_data()
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
     assert_eq!(
-        new_schema, 13,
+        new_schema, 14,
         "opening schema6 must install current storage"
     );
     for table in [
@@ -621,7 +621,7 @@ fn schema_six_requests_replay_exactly_and_holding_prices_feed_new_recipe_snapsho
     )
     .unwrap();
     assert_eq!(newest["format_version"], 2);
-    assert_eq!(newest["schema_version"], 13);
+    assert_eq!(newest["schema_version"], 14);
     for key in ["recipe_versions", "recipe_lines", "recipe_heads"] {
         assert_eq!(newest["state"][key].as_array().unwrap().len(), 1);
     }

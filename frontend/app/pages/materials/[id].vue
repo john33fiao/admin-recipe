@@ -56,6 +56,7 @@ useHead({ title: computed(() => `${material.value?.name ?? '재료 상세'} | �
     <div v-if="error" class="notice warning" role="alert"><p>{{ error }}</p><button v-if="!missing" class="text-button" type="button" :disabled="connection !== 'connected' || loading" @click="load">다시 불러오기</button><NuxtLink v-else to="/">재료 목록에서 확인</NuxtLink></div>
   </section>
   <template v-if="material">
+    <MaterialProfilePanel :key="`profile-${material.id}`" :material-id="material.id" />
     <HoldingPanel :material-id="material.id" :revision="material.revision" />
     <RecipeUsesPanel :material-id="material.id" :revision="material.revision" />
     <MaterialEditor :key="material.id" :material="material" :refresh="load" />

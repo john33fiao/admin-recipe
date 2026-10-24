@@ -185,7 +185,7 @@ fn schema_eleven_migration_preserves_all_original_columns_and_journal_bytes() {
     assert_eq!(
         db.pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0))
             .unwrap(),
-        13
+        14
     );
     for (name, (columns, original)) in before {
         assert_eq!(rows(&db, &name, &columns), original, "{name}");

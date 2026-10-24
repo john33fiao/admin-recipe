@@ -452,7 +452,8 @@ impl Store {
         input.source_recipe_version_id =
             catalog::uuid(&input.source_recipe_version_id, "원본 레시피 버전")?;
         let payload = serde_json::to_string(&(&id, &input)).map_err(unavailable)?;
-        self.mutate(Some(&meta),&meta.request_id,"recipe.copy",&payload,move|tx,seq,time,state| {
+        let root = self.root.clone();
+        let result = self.mutate(Some(&meta),&meta.request_id,"recipe.copy",&payload,move|tx,seq,time,state| {
             let owner=required_owner(tx,&id,&input.expected_material_version_id)?;
             let row=current(tx,&id)?.ok_or_else(||validation("복제할 레시피를 찾을 수 없습니다"))?;
             if row.id!=input.source_recipe_version_id{return Err(stale());}
@@ -465,8 +466,16 @@ impl Store {
             let data=RecipeDataInput {basis_count:source.basis_count,reference_output:source.reference_output.map(|o|RecipeReferenceInput{quantity:o.input_quantity,unit:o.input_unit}),selling_price:source.selling_price,cooking_description:source.cooking_description,process:source.process,reference_time:source.reference_time,lines:source.lines.into_iter().map(|l|RecipeLineInput{material_id:l.material_id,material_version_id:l.material_version_id,quantity:l.input_quantity,unit:l.input_unit,note:l.note}).collect()};
             let version=prepare_version(tx,&new_owner,data,None,Some(source.id),seq,time)?;
             insert_version(tx,&version)?;
+            super::profile::copy_profile(tx,&root,&id,&new_owner,seq,time)?;
             Ok(RecipeMutation{item,version,state:state.clone()})
-        })
+        })?;
+        super::profile::verify_copy_result(
+            &self.connection,
+            &self.root,
+            &result.item.id,
+            &result.version.seq,
+        )?;
+        Ok(result)
     }
     pub fn recipe_version(
         &self,

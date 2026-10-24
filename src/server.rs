@@ -8,7 +8,9 @@ use crate::{
         ReviseCatalogMaterial,
     },
     lifecycle::{Lifecycle, Policy},
+    photo_assets::{MAX_PHOTO_BYTES, PhotoAssetError, PhotoUpload, photo_upload},
     production::ProductionFilter,
+    profile::{MAX_PROFILE_METADATA_BYTES, ReviseMaterialProfile},
     purchase_order::OrderFilter,
     purchase_return::PurchaseReturnFilter,
     receipt::ReceiptFilter,
@@ -22,7 +24,8 @@ use axum::{
     Json, Router,
     body::Body,
     extract::{
-        DefaultBodyLimit, Path, Query, State, WebSocketUpgrade,
+        DefaultBodyLimit, FromRequest, Multipart, Path, Query, State, WebSocketUpgrade,
+        multipart::MultipartError,
         rejection::{JsonRejection, QueryRejection},
         ws::{Message, WebSocket},
     },
@@ -31,7 +34,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, post},
 };
-use futures_util::SinkExt;
+use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{
@@ -41,7 +44,10 @@ use std::{
     },
     time::{Duration, Instant, SystemTime},
 };
-use tokio::sync::{Notify, watch};
+use tokio::sync::{Notify, Semaphore, watch};
+
+const MAX_PROFILE_BODY_BYTES: usize = 11 * 1024 * 1024;
+const PROFILE_BODY_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[derive(Clone)]
 pub struct AppState(Arc<Inner>);
@@ -57,6 +63,7 @@ struct Inner {
     stop: watch::Sender<bool>,
     sockets: AtomicUsize,
     sockets_done: Notify,
+    photo_uploads: Arc<Semaphore>,
 }
 impl AppState {
     pub fn new(store: Store, host: String, token: String, policy: Policy) -> Self {
@@ -74,6 +81,7 @@ impl AppState {
             stop,
             sockets: AtomicUsize::new(0),
             sockets_done: Notify::new(),
+            photo_uploads: Arc::new(Semaphore::new(1)),
         }))
     }
     fn now(&self) -> u64 {
@@ -200,6 +208,17 @@ pub fn router(state: AppState) -> Router {
         .route("/api/materials/{id}/versions", post(revise))
         .route("/api/materials/{id}/archive", post(archive))
         .route("/api/materials/{id}/prices", post(add_price))
+        .route("/api/materials/{id}/profile", get(profile_current))
+        .route(
+            "/api/materials/{id}/profiles",
+            get(profile_versions)
+                .merge(post(profile_revise).layer(DefaultBodyLimit::max(MAX_PROFILE_BODY_BYTES))),
+        )
+        .route(
+            "/api/materials/{id}/profiles/{version}",
+            get(profile_version),
+        )
+        .route("/api/photo-assets/{sha256}", get(photo_asset))
         .route("/api/business", get(business_list))
         .route("/api/business/drafts", post(business_create))
         .route("/api/business/{id}", get(business_detail))
@@ -358,6 +377,228 @@ async fn session(State(state): State<AppState>, Json(input): Json<Session>) -> R
 }
 async fn catalog_state(State(state): State<AppState>) -> Result<impl IntoResponse, ApiError> {
     Ok(Json(state.with_store(|s| s.catalog_state()).await?))
+}
+
+fn profile_missing() -> ApiError {
+    ApiError(
+        StatusCode::NOT_FOUND,
+        "품목 또는 사진·구입처 버전을 찾을 수 없습니다.".into(),
+        "not_found",
+    )
+}
+async fn profile_current(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<impl IntoResponse, ApiError> {
+    Ok(Json(
+        state
+            .with_store(move |store| store.profile_current(&id))
+            .await?
+            .ok_or_else(profile_missing)?,
+    ))
+}
+async fn profile_versions(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<impl IntoResponse, ApiError> {
+    Ok(Json(
+        state
+            .with_store(move |store| store.profile_versions(&id))
+            .await?
+            .ok_or_else(profile_missing)?,
+    ))
+}
+async fn profile_version(
+    State(state): State<AppState>,
+    Path((id, version)): Path<(String, String)>,
+) -> Result<impl IntoResponse, ApiError> {
+    Ok(Json(
+        state
+            .with_store(move |store| store.profile_version(&id, &version))
+            .await?
+            .ok_or_else(profile_missing)?,
+    ))
+}
+fn photo_error(error: PhotoAssetError) -> ApiError {
+    match error {
+        PhotoAssetError::Validation(message) => {
+            ApiError(StatusCode::BAD_REQUEST, message, "validation")
+        }
+        PhotoAssetError::Unavailable(message) => {
+            ApiError(StatusCode::SERVICE_UNAVAILABLE, message, "unavailable")
+        }
+    }
+}
+fn multipart_error(error: MultipartError) -> ApiError {
+    let status = if error.status() == StatusCode::PAYLOAD_TOO_LARGE {
+        StatusCode::PAYLOAD_TOO_LARGE
+    } else {
+        StatusCode::BAD_REQUEST
+    };
+    ApiError(
+        status,
+        "사진 전송 본문 또는 크기를 확인해 주세요.".into(),
+        "validation",
+    )
+}
+fn profile_invalid(message: &str) -> ApiError {
+    ApiError(StatusCode::BAD_REQUEST, message.into(), "validation")
+}
+async fn profile_body(
+    request: Request<Body>,
+    state: &AppState,
+) -> Result<(ReviseMaterialProfile, Option<PhotoUpload>), ApiError> {
+    // Read the entire bounded envelope, including any multipart epilogue. A parser
+    // may stop at the closing boundary before a chunked body's remaining bytes.
+    let (parts, body) = request.into_parts();
+    let mut stream = body.into_data_stream();
+    let mut envelope = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        let chunk =
+            chunk.map_err(|_| profile_invalid("사진 전송 본문을 끝까지 읽지 못했습니다."))?;
+        if envelope
+            .len()
+            .checked_add(chunk.len())
+            .is_none_or(|size| size > MAX_PROFILE_BODY_BYTES)
+        {
+            return Err(ApiError(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "전체 사진 전송 크기가 11MiB를 넘었습니다.".into(),
+                "validation",
+            ));
+        }
+        envelope.try_reserve(chunk.len()).map_err(|_| {
+            ApiError(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "사진 전송을 위한 메모리를 확보하지 못했습니다.".into(),
+                "unavailable",
+            )
+        })?;
+        envelope.extend_from_slice(&chunk);
+    }
+    let request = Request::from_parts(parts, Body::from(envelope));
+    let mut multipart = Multipart::from_request(request, state)
+        .await
+        .map_err(|_| profile_invalid("multipart 사진 전송 형식이 올바르지 않습니다."))?;
+    let mut metadata = None;
+    let mut photo = None;
+    while let Some(mut field) = multipart.next_field().await.map_err(multipart_error)? {
+        let name = field
+            .name()
+            .ok_or_else(|| profile_invalid("전송 항목의 이름이 없습니다."))?
+            .to_owned();
+        let filename = field.file_name().map(str::to_owned);
+        let mime = field.content_type().map(str::to_owned);
+        let limit = match name.as_str() {
+            "metadata" if metadata.is_none() && filename.is_none() => MAX_PROFILE_METADATA_BYTES,
+            "photo" if photo.is_none() && filename.is_some() => MAX_PHOTO_BYTES,
+            _ => return Err(profile_invalid("알 수 없거나 중복된 사진 전송 항목입니다.")),
+        };
+        let mut bytes = Vec::new();
+        while let Some(chunk) = field.chunk().await.map_err(multipart_error)? {
+            if bytes
+                .len()
+                .checked_add(chunk.len())
+                .is_none_or(|size| size > limit)
+            {
+                return Err(ApiError(
+                    StatusCode::PAYLOAD_TOO_LARGE,
+                    "사진 또는 설명 전송 크기가 한도를 넘었습니다.".into(),
+                    "validation",
+                ));
+            }
+            bytes.try_reserve(chunk.len()).map_err(|_| {
+                ApiError(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "사진 전송을 위한 메모리를 확보하지 못했습니다.".into(),
+                    "unavailable",
+                )
+            })?;
+            bytes.extend_from_slice(&chunk);
+        }
+        if name == "metadata" {
+            metadata = Some(
+                serde_json::from_slice(&bytes)
+                    .map_err(|_| profile_invalid("사진·구입처 입력 형식을 확인해 주세요."))?,
+            );
+        } else {
+            photo = Some(
+                photo_upload(
+                    filename.as_deref().unwrap_or_default(),
+                    mime.as_deref(),
+                    bytes,
+                )
+                .map_err(photo_error)?,
+            );
+        }
+    }
+    Ok((
+        metadata.ok_or_else(|| profile_invalid("사진·구입처 입력 정보가 없습니다."))?,
+        photo,
+    ))
+}
+async fn profile_revise(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    request: Request<Body>,
+) -> Result<impl IntoResponse, ApiError> {
+    // Admission precedes body polling. Moving the permit into blocking work also
+    // retains it if the HTTP client disconnects after the Store accepted the write.
+    let permit = state
+        .0
+        .photo_uploads
+        .clone()
+        .try_acquire_owned()
+        .map_err(|_| {
+            ApiError(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "다른 사진 저장을 마친 뒤 같은 요청을 다시 시도해 주세요.".into(),
+                "unavailable",
+            )
+        })?;
+    let (input, photo) = tokio::select! {
+        _ = state.cancelled() => return Err(ApiError(StatusCode::SERVICE_UNAVAILABLE, "앱을 종료하는 중입니다.".into(), "unavailable")),
+        result = tokio::time::timeout(PROFILE_BODY_TIMEOUT, profile_body(request, &state)) => {
+            result.map_err(|_| ApiError(StatusCode::REQUEST_TIMEOUT, "사진 전송 시간이 초과되었습니다. 같은 요청을 다시 시도해 주세요.".into(), "unavailable"))??
+        }
+    };
+    let detail = state
+        .with_store(move |store| {
+            let _permit = permit;
+            store.profile_revise(&id, input, photo)
+        })
+        .await?;
+    Ok((StatusCode::CREATED, Json(detail)))
+}
+async fn photo_asset(
+    State(state): State<AppState>,
+    Path(sha256): Path<String>,
+) -> Result<Response, ApiError> {
+    let photo = state
+        .with_store(move |store| store.photo_asset_bytes(&sha256))
+        .await?
+        .ok_or_else(|| {
+            ApiError(
+                StatusCode::NOT_FOUND,
+                "등록된 사진을 찾을 수 없습니다.".into(),
+                "not_found",
+            )
+        })?;
+    let filename = format!(
+        "inline; filename=\"{}.{}\"",
+        photo.descriptor.sha256,
+        photo.descriptor.format.extension()
+    );
+    Ok((
+        [
+            ("content-type", photo.descriptor.format.mime().to_owned()),
+            ("content-length", photo.bytes.len().to_string()),
+            ("content-disposition", filename),
+            ("cross-origin-resource-policy", "same-origin".to_owned()),
+        ],
+        photo.bytes,
+    )
+        .into_response())
 }
 async fn list(
     State(state): State<AppState>,
@@ -1217,6 +1458,97 @@ async fn static_asset(_headers: HeaderMap, request: Request<Body>) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn accepted_photo_write_keeps_admission_after_disconnect_and_finishes_during_shutdown() {
+        use image::ImageEncoder;
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = Store::open(dir.path()).unwrap();
+        let item = store
+            .create(CreateMaterial {
+                request_id: uuid::Uuid::new_v4().to_string(),
+                name: "가상 사진 종료".into(),
+                unit: "g".into(),
+            })
+            .unwrap();
+        let version = store
+            .catalog_detail(&item.id)
+            .unwrap()
+            .unwrap()
+            .item
+            .version_id;
+        let catalog_state = store.catalog_state().unwrap();
+        let input: ReviseMaterialProfile = serde_json::from_value(json!({
+            "meta":{"request_id":uuid::Uuid::new_v4().to_string(),"epoch":catalog_state.epoch,"expected_revision":catalog_state.revision},
+            "expected_material_version_id":version,"expected_profile_version_id":null,
+            "photos":[{"source":"upload","caption":"가상"}],"primary_position":0,"suppliers":[]
+        })).unwrap();
+        let mut bytes = Vec::new();
+        image::codecs::png::PngEncoder::new(&mut bytes)
+            .write_image(&[1, 2, 3, 255], 1, 1, image::ExtendedColorType::Rgba8)
+            .unwrap();
+        let photo = photo_upload("synthetic.png", Some("image/png"), bytes).unwrap();
+        let state = AppState::new(
+            store,
+            "127.0.0.1:4321".into(),
+            "photo".into(),
+            Policy::default(),
+        );
+        let permit = state.0.photo_uploads.clone().try_acquire_owned().unwrap();
+        let worker = state.clone();
+        let material_id = item.id.clone();
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let (done_tx, done_rx) = tokio::sync::oneshot::channel();
+        let client = tokio::spawn(async move {
+            worker
+                .with_store(move |store| {
+                    let _permit = permit;
+                    entered_tx.send(()).unwrap();
+                    release_rx.recv().unwrap();
+                    let result = store.profile_revise(&material_id, input, Some(photo));
+                    done_tx.send(result.is_ok()).unwrap();
+                    result.map(|_| ())
+                })
+                .await
+        });
+        entered_rx.await.unwrap();
+        client.abort();
+        state.shutdown();
+        assert_eq!(state.0.photo_uploads.available_permits(), 0);
+        release_tx.send(()).unwrap();
+        assert!(done_rx.await.unwrap());
+        // Taking the Store lock waits for the accepted closure and its permit drop.
+        let saved = state
+            .0
+            .store
+            .lock()
+            .unwrap()
+            .profile_current(&item.id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(saved.version.unwrap().photos.len(), 1);
+        assert_eq!(state.0.photo_uploads.available_permits(), 1);
+        assert!(state.with_store(|store| store.list()).await.is_err());
+        drop(state);
+        let reopened = Store::open(dir.path()).unwrap();
+        assert_eq!(
+            reopened
+                .profile_current(&item.id)
+                .unwrap()
+                .unwrap()
+                .version
+                .unwrap()
+                .photos
+                .len(),
+            1
+        );
+        assert_eq!(
+            std::fs::read_dir(dir.path().join("snapshots"))
+                .unwrap()
+                .count(),
+            2
+        );
+    }
     #[tokio::test]
     async fn shutdown_allows_accepted_write_to_finish_but_refuses_later_work() {
         let dir = tempfile::tempdir().unwrap();

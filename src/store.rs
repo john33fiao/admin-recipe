@@ -17,6 +17,7 @@ mod correction;
 mod holding;
 mod mutation;
 mod production;
+mod profile;
 mod purchase_order;
 mod purchase_return;
 mod receipt;
@@ -28,7 +29,7 @@ mod snapshot;
 mod stocktake;
 mod waste;
 
-const SCHEMA_VERSION: i64 = 13;
+const SCHEMA_VERSION: i64 = 14;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Material {
@@ -146,6 +147,8 @@ impl Store {
         store
             .recover()
             .context("JSON 변경 기록을 복구할 수 없습니다")?;
+        profile::verify_assets(&store.connection, &store.root)
+            .context("사진 자산을 확인할 수 없습니다")?;
         Ok(store)
     }
 
@@ -328,6 +331,7 @@ fn validate_schema(connection: &Connection) -> anyhow::Result<()> {
     reconciliation::validate_reconciliation_schema(connection)?;
     correction::validate_correction_schema(connection)?;
     purchase_return::validate_purchase_return_schema(connection)?;
+    profile::validate_profile_schema(connection)?;
     let violation: Option<String> = connection
         .query_row("PRAGMA foreign_key_check", [], |row| row.get(0))
         .optional()?;
@@ -428,6 +432,19 @@ fn migrate(connection: &mut Connection, starting_version: i64) -> anyhow::Result
     }
     if version < 13 {
         schema::migrate_purchase_returns(&transaction)?;
+    }
+    if version < 14 {
+        let journals = transaction
+            .prepare("SELECT sequence,payload FROM snapshot_outbox ORDER BY sequence")?
+            .query_map([], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        for (sequence, payload) in journals {
+            snapshot::validate_source(&payload, sequence, 13)?;
+        }
+        profile::migrate_profiles(&transaction)?;
+        transaction.pragma_update(None, "user_version", 14)?;
     }
     validate_schema(&transaction)?;
     transaction.commit()?;

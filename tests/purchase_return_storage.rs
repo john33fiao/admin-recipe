@@ -179,7 +179,7 @@ fn schema_twelve_migration_preserves_original_columns_and_every_journal_byte() {
     assert_eq!(
         db.pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0))
             .unwrap(),
-        13
+        14
     );
     for (table, (columns, original)) in before {
         assert_eq!(rows(&db, &table, &columns), original, "{table}");

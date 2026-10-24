@@ -14,9 +14,14 @@ pub(super) struct Snapshot {
 }
 
 impl Snapshot {
-    pub(super) fn into_state(self) -> Result<SnapshotStateV13, StoreError> {
+    pub(super) fn into_state(self) -> Result<SnapshotStateV14, StoreError> {
         let mut value = serde_json::to_value(self.state).map_err(unavailable)?;
         value["purchase_returns"] = serde_json::json!([]);
+        value["photo_assets"] = serde_json::json!([]);
+        value["material_profile_versions"] = serde_json::json!([]);
+        value["material_profile_heads"] = serde_json::json!([]);
+        value["material_profile_photos"] = serde_json::json!([]);
+        value["material_profile_suppliers"] = serde_json::json!([]);
         serde_json::from_value(value).map_err(unavailable)
     }
 }
