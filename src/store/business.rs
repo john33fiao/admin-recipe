@@ -43,7 +43,8 @@ fn result_material_id(result: &BusinessResult) -> Option<&str> {
     match result {
         BusinessResult::CatalogPrice { material_id, .. }
         | BusinessResult::PurchaseOrder { material_id, .. }
-        | BusinessResult::Receipt { material_id, .. } => Some(material_id),
+        | BusinessResult::Receipt { material_id, .. }
+        | BusinessResult::ReconciledReceipt { material_id, .. } => Some(material_id),
         BusinessResult::Production { .. }
         | BusinessResult::Sale { .. }
         | BusinessResult::Stocktake { .. }

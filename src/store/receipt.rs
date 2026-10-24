@@ -387,14 +387,6 @@ pub(super) fn inspect_receipt(
     let material = material.ok_or_else(|| unavailable("재료 검증 결과가 없습니다"))?;
     let quantity = canonical.ok_or_else(|| unavailable("수량 검증 결과가 없습니다"))?;
     let amount = amount.ok_or_else(|| unavailable("금액 검증 결과가 없습니다"))?;
-    let holding = holding::current_input(connection, &material.material_id)?;
-    let projection = match project_receipt(&holding, quantity, amount) {
-        Ok(v) => v,
-        Err(e) => {
-            issue(&mut issues, "quantity", "invalid_holding", e);
-            return Ok((issues, None));
-        }
-    };
     let order_after = order
         .as_ref()
         .map(|o| {
@@ -412,6 +404,30 @@ pub(super) fn inspect_receipt(
             })
         })
         .transpose()?;
+    if let ReceiptStockEffectDraft::Reconciled { selections } = &data.stock_effect {
+        return super::reconciliation::inspect(
+            connection,
+            super::reconciliation::ReceiptFacts {
+                material,
+                quantity,
+                amount,
+                input_quantity: data.quantity.trim().into(),
+                input_unit: data.unit.trim().into(),
+                receipt_date: date.unwrap().to_string(),
+                order_before: order.map(Box::new),
+                order_after,
+            },
+            selections,
+        );
+    }
+    let holding = holding::current_input(connection, &material.material_id)?;
+    let projection = match project_receipt(&holding, quantity, amount) {
+        Ok(v) => v,
+        Err(e) => {
+            issue(&mut issues, "quantity", "invalid_holding", e);
+            return Ok((issues, None));
+        }
+    };
     Ok((
         issues,
         Some(BusinessEffect::Receipt {
@@ -454,7 +470,7 @@ pub(super) fn apply_receipt(
             validation(message)
         });
     }
-    let Some(BusinessEffect::Receipt {
+    let (
         material_id,
         material_version_id,
         quantity,
@@ -464,27 +480,65 @@ pub(super) fn apply_receipt(
         input_unit,
         receipt_date,
         order_before,
-        ..
-    }) = effect
-    else {
-        return Err(unavailable("입고 검증 결과가 없습니다"));
+        reconciled,
+    ) = match effect {
+        Some(BusinessEffect::Receipt {
+            material_id,
+            material_version_id,
+            quantity,
+            amount,
+            unit,
+            input_quantity,
+            input_unit,
+            receipt_date,
+            order_before,
+            ..
+        }) => (
+            material_id,
+            material_version_id,
+            quantity,
+            amount,
+            unit,
+            input_quantity,
+            input_unit,
+            receipt_date,
+            order_before,
+            None,
+        ),
+        Some(BusinessEffect::ReconciledReceipt { receipt }) => (
+            receipt.material_id.clone(),
+            receipt.material_version_id.clone(),
+            receipt.quantity.clone(),
+            receipt.amount.clone(),
+            receipt.unit.clone(),
+            receipt.input_quantity.clone(),
+            receipt.input_unit.clone(),
+            receipt.receipt_date.clone(),
+            receipt.order_before.clone(),
+            Some(receipt),
+        ),
+        _ => return Err(unavailable("입고 검증 결과가 없습니다")),
     };
     let id = Uuid::new_v4().to_string();
     let q = Quantity::parse(&quantity).map_err(unavailable)?;
     let a = Money::parse(&amount).map_err(unavailable)?;
     connection.execute("INSERT INTO receipts(id,confirmation_id,material_id,material_version_id,quantity_micros,unit,input_quantity,input_unit,amount_micros,receipt_date,note,recorded_at,sequence,source_kind,order_id,ordered_version_id) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)",params![id,confirmation_id,material_id,material_version_id,q.micros(),unit,input_quantity,input_unit,a.micros(),receipt_date,data.note,time,seq,if order_before.is_some(){"order"}else{"direct"},order_before.as_ref().map(|o|o.order_id.as_str()),order_before.as_ref().map(|o|o.id.as_str())]).map_err(unavailable)?;
-    holding::apply_receipt(
-        connection,
-        holding::ReceiptHoldingInput {
-            receipt_id: &id,
-            material_id: &material_id,
-            material_version_id: &material_version_id,
-            quantity: q,
-            amount: a,
-            seq,
-            time,
-        },
-    )?;
+    if let Some(effect) = reconciled {
+        super::reconciliation::apply(connection, &id, confirmation_id, *effect, seq, time)?;
+    } else {
+        holding::apply_receipt(
+            connection,
+            holding::ReceiptHoldingInput {
+                receipt_id: &id,
+                material_id: &material_id,
+                material_version_id: &material_version_id,
+                quantity: q,
+                amount: a,
+                seq,
+                time,
+            },
+        )?;
+    }
     if let Some(before) = order_before {
         let row = records(connection, None, Some(&id))?
             .pop()
@@ -508,6 +562,9 @@ pub(super) fn result(
     connection: &Connection,
     confirmation_id: &str,
 ) -> Result<BusinessResult, StoreError> {
+    if let Some(result) = super::reconciliation::result(connection, confirmation_id)? {
+        return Ok(result);
+    }
     connection.query_row("SELECT r.id,h.id,r.material_id,r.material_version_id,r.order_id,c.received_version_id FROM receipts r JOIN holding_versions h ON h.receipt_id=r.id LEFT JOIN order_receipt_closures c ON c.receipt_id=r.id WHERE r.confirmation_id=?1",[confirmation_id],|r|Ok(BusinessResult::Receipt{receipt_id:r.get(0)?,holding_version_id:r.get(1)?,material_id:r.get(2)?,material_version_id:r.get(3)?,order_id:r.get(4)?,order_version_id:r.get(5)?})).map_err(unavailable)
 }
 
@@ -527,18 +584,33 @@ impl Store {
         let Some(item) = records(&self.connection, None, Some(&id))?.pop() else {
             return Ok(None);
         };
-        let holding_version_id = self
+        let reconciliation = super::reconciliation::records(&self.connection)?
+            .into_iter()
+            .find(|r| r.receipt_id == id);
+        let holding_version_id: Option<String> = self
             .connection
             .query_row(
                 "SELECT id FROM holding_versions WHERE receipt_id=?1",
                 [&id],
                 |r| r.get(0),
             )
+            .optional()
             .map_err(unavailable)?;
+        let holding_version_id = holding_version_id.or_else(|| {
+            reconciliation
+                .as_ref()
+                .and_then(|r| {
+                    r.material_results
+                        .iter()
+                        .find(|e| e.material_id == item.material_id)
+                })
+                .map(|e| e.holding_version_id.clone())
+        });
         Ok(Some(ReceiptDetail {
             order_closure: actual_closure(&self.connection, &item)?,
             item,
             holding_version_id,
+            reconciliation,
             state: catalog::state(&self.connection)?,
         }))
     }

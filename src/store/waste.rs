@@ -124,6 +124,7 @@ pub(super) fn apply_waste(
             receipt_id: None,
             production_effect_id: None,
             observation_version_id: None,
+            reconciliation_effect_id: None,
             waste_id: Some(&id),
             before: &before,
             after: &waste.after,

@@ -39,6 +39,88 @@ function harness() {
   return { create: context.useBusinessDraft, storage, requests }
 }
 
+function reconciledReceiptPayload() {
+  return { kind: 'receipt', version: 1, data: {
+    source: { kind: 'direct', material_id: recordId, material_version_id: headId },
+    quantity: '3', unit: 'kg', amount: '6000', receipt_date: '2026-10-24', note: '',
+    stock_effect: { kind: 'reconciled', selections: [
+      { observation_version_id: headId, source: { kind: 'source', source_key: { kind: 'observation_initial', id: recordId, position: 0 } }, included_quantity: '1000' },
+      { observation_version_id: requestId, source: { kind: 'source', source_key: { kind: 'observation_excess', id: headId, position: 0 } }, included_quantity: '2000' },
+    ] },
+  } }
+}
+
+test('reconciled receipt nested selection edits mark dirty and invalidate preview', async () => {
+  const h = harness()
+  const scope = vue.effectScope()
+  try {
+    const seed = { ...initial, payload: reconciledReceiptPayload() }
+    const editor = scope.run(() => h.create(recordId, seed, async () => null))!
+    const showing = editor.showPreview()
+    h.requests[0]!.resolve({ record_id: recordId, head_id: headId, state: { epoch, revision: '5' }, can_confirm: true, issues: [], effect: { kind: 'reconciled_receipt' } })
+    await showing
+    editor.payload.value.data.stock_effect.selections[0].included_quantity = '999'
+    assert.equal(editor.preview.value, null)
+    assert.equal(editor.dirty.value, true)
+    assert.equal(seed.payload.data.stock_effect.selections[0]!.included_quantity, '1000')
+  } finally { scope.stop() }
+})
+
+test('reconciled receipt uncertain retry preserves the sent selection body after navigation', async () => {
+  const h = harness()
+  const seed = { ...initial, payload: reconciledReceiptPayload() }
+  const firstScope = vue.effectScope()
+  const first = firstScope.run(() => h.create(recordId, seed, async () => null))!
+  const saving = first.send('revise')
+  const original = JSON.stringify(h.requests[0]!.body)
+  first.payload.value.data.stock_effect.selections[0].included_quantity = '0'
+  first.payload.value.data.stock_effect.selections[1].source.source_key.id = recordId
+  first.payload.value.data.stock_effect.selections.reverse()
+  firstScope.stop()
+  const nextScope = vue.effectScope()
+  try {
+    const next = nextScope.run(() => h.create(recordId, seed, async () => null))!
+    assert.equal(next.locked.value, true)
+    h.requests[0]!.reject(new ApiError(503, 'uncertain', 'unavailable'))
+    await saving
+    const retry = next.send('revise')
+    const retried = JSON.stringify(h.requests[1]!.body)
+    const pendingStorage = h.storage.get(`sunchang.business.${recordId}.pending.v1`)
+    h.requests[1]!.resolve({ result: { item: { ...item, kind: 'receipt' }, head: { ...head, payload: JSON.parse(original).payload }, issues: [] }, state: { epoch, revision: '6' } })
+    await retry
+    assert.equal(h.requests[0]!.path, `/api/business/${recordId}/draft-revisions`)
+    assert.equal(h.requests[1]!.path, h.requests[0]!.path)
+    assert.equal(retried, original)
+    assert.equal(JSON.stringify(JSON.parse(pendingStorage!).body), original)
+    assert.equal(next.pending.value, null)
+  } finally { nextScope.stop() }
+})
+
+test('reconciled receipt size rejection retains the immutable common-endpoint request until review', async () => {
+  const h = harness()
+  const scope = vue.effectScope()
+  try {
+    const seed = { ...initial, payload: reconciledReceiptPayload(), recordId: null, headId: null }
+    const editor = scope.run(() => h.create('new.receipt', seed, async () => null))!
+    const sending = editor.send('create')
+    const original = JSON.stringify(editor.pending.value)
+    assert.equal(h.requests[0]!.path, '/api/business/drafts')
+    h.requests[0]!.reject(new ApiError(413, '입력 크기를 확인해 주세요', 'validation'))
+    await sending
+    assert.equal(editor.canReview.value, true)
+    assert.equal(editor.canRetry.value, false)
+    assert.equal(JSON.stringify(editor.pending.value), original)
+    assert.equal(await editor.send('create'), null)
+    const reviewing = editor.review()
+    h.requests[1]!.resolve({ epoch, revision: '9' })
+    await reviewing
+    assert.equal(editor.pending.value, null)
+    assert.equal(editor.payload.value.data.stock_effect.selections[0].included_quantity, '1000')
+    assert.equal(editor.payload.value.data.stock_effect.selections[1].source.source_key.id, headId)
+    assert.equal(editor.locked.value, false)
+  } finally { scope.stop() }
+})
+
 test('production nested edits invalidate preview and preserve original pending through navigation and retry', async () => {
   const h = harness()
   const scope = vue.effectScope()

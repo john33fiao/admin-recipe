@@ -347,6 +347,7 @@ pub(super) fn apply_stocktake(
                 production_effect_id: None,
                 waste_id: None,
                 observation_version_id: Some(&version),
+                reconciliation_effect_id: None,
                 before: &before,
                 after: &effect.after,
                 seq,

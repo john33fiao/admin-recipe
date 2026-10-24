@@ -1,10 +1,11 @@
 use super::{
     Material, SCHEMA_VERSION, StoreError, business, catalog, holding, production, purchase_order,
-    read_materials, receipt, recipe, sale, stocktake, unavailable, waste,
+    read_materials, receipt, recipe, reconciliation, sale, stocktake, unavailable, waste,
 };
 use crate::catalog::{CatalogState, MaterialPriceVersion, MaterialVersion};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
+mod frozen10;
 mod frozen6;
 mod frozen7;
 mod frozen8;
@@ -221,13 +222,13 @@ struct SnapshotStateV5 {
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct SnapshotV2Schema10 {
+struct SnapshotV2Schema11 {
     format_version: u32,
     schema_version: i64,
     sequence: String,
     request_id: String,
     recorded_at: String,
-    state: SnapshotStateV10,
+    state: SnapshotStateV11,
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -284,7 +285,7 @@ struct SnapshotStateV7 {
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct SnapshotStateV10 {
+struct SnapshotStateV11 {
     materials: Vec<Material>,
     material_versions: Vec<MaterialVersion>,
     material_heads: Vec<Head>,
@@ -324,6 +325,12 @@ struct SnapshotStateV10 {
     consumption_heads: Vec<stocktake::ConsumptionHead>,
     consumption_rows: Vec<stocktake::ConsumptionRow>,
     wastes: Vec<crate::waste::WasteRecord>,
+    receipt_reconciliations: Vec<crate::reconciliation::ReceiptReconciliation>,
+    inclusion_links: Vec<reconciliation::LinkRow>,
+    inclusion_link_versions: Vec<reconciliation::LinkVersionRow>,
+    inclusion_link_heads: Vec<reconciliation::LinkHead>,
+    inclusion_reservations: Vec<reconciliation::ReservationRow>,
+    reconciliation_material_effects: Vec<reconciliation::MaterialEffectRow>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -439,7 +446,8 @@ pub(super) fn encode(
     let productions = production::snapshot_rows(connection)?;
     let sales = sale::snapshot_rows(connection)?;
     let stocktakes = stocktake::snapshot_rows(connection)?;
-    let state = SnapshotStateV10 {
+    let reconciliations = reconciliation::snapshot_rows(connection)?;
+    let state = SnapshotStateV11 {
         materials: old.materials,
         material_versions: old.material_versions,
         material_heads: old.material_heads,
@@ -479,8 +487,14 @@ pub(super) fn encode(
         consumption_heads: stocktakes.consumption_heads,
         consumption_rows: stocktakes.consumption_rows,
         wastes: waste::snapshot_rows(connection)?,
+        receipt_reconciliations: reconciliations.records,
+        inclusion_links: reconciliations.links,
+        inclusion_link_versions: reconciliations.versions,
+        inclusion_link_heads: reconciliations.heads,
+        inclusion_reservations: reconciliations.reservations,
+        reconciliation_material_effects: reconciliations.effects,
     };
-    let snapshot = SnapshotV2Schema10 {
+    let snapshot = SnapshotV2Schema11 {
         format_version: 2,
         schema_version: SCHEMA_VERSION,
         sequence: sequence.to_string(),
@@ -568,6 +582,7 @@ pub(super) fn validate_source(
                 materials: &current.materials,
                 material_versions: &current.material_versions,
                 receipts: &current.receipts,
+                reconciliations: &[],
                 purchase_order_versions: &current.purchase_order_versions,
             })?;
             receipt::validate_snapshot(
@@ -598,6 +613,7 @@ pub(super) fn validate_source(
                 materials: &current.materials,
                 material_versions: &current.material_versions,
                 receipts: &current.receipts,
+                reconciliations: &[],
                 purchase_order_versions: &current.purchase_order_versions,
             })?;
             receipt::validate_snapshot(
@@ -635,7 +651,13 @@ pub(super) fn validate_source(
             matching_sequence
         }
         (Some(2), Some(10)) => {
-            let current: SnapshotV2Schema10 = serde_json::from_str(payload).map_err(unavailable)?;
+            let frozen: frozen10::Snapshot = serde_json::from_str(payload).map_err(unavailable)?;
+            let matching_sequence = frozen.sequence == sequence.to_string();
+            validate_current_state(&frozen.into_state()?, sequence)?;
+            matching_sequence
+        }
+        (Some(2), Some(11)) => {
+            let current: SnapshotV2Schema11 = serde_json::from_str(payload).map_err(unavailable)?;
             validate_current_state(&current.state, sequence)?;
             current.sequence == sequence.to_string()
         }
@@ -647,7 +669,7 @@ pub(super) fn validate_source(
     Ok(())
 }
 
-fn validate_current_state(state: &SnapshotStateV10, sequence: i64) -> Result<(), StoreError> {
+fn validate_current_state(state: &SnapshotStateV11, sequence: i64) -> Result<(), StoreError> {
     for revision in &state.business_revisions {
         crate::business::normalize_business_payload(revision.payload.clone())
             .map_err(unavailable)?;
@@ -663,6 +685,7 @@ fn validate_current_state(state: &SnapshotStateV10, sequence: i64) -> Result<(),
         materials: &state.materials,
         material_versions: &state.material_versions,
         receipts: &state.receipts,
+        reconciliations: &state.receipt_reconciliations,
         purchase_order_versions: &state.purchase_order_versions,
     })?;
     receipt::validate_receipt_links(
@@ -670,11 +693,13 @@ fn validate_current_state(state: &SnapshotStateV10, sequence: i64) -> Result<(),
         &state.order_receipt_closures,
         &state.purchase_order_versions,
     )?;
-    holding::validate_snapshot(
+    holding::validate_snapshot_reconciled(
         &state.receipts,
         &state.production_effects,
         &state.stocktake_versions,
         &state.wastes,
+        &state.receipt_reconciliations,
+        &state.reconciliation_material_effects,
         &state.holding_versions,
         &state.holding_heads,
     )?;
@@ -806,6 +831,30 @@ fn validate_current_state(state: &SnapshotStateV10, sequence: i64) -> Result<(),
         mutations: &sale_mutations,
         sequence,
     })?;
+    reconciliation::validate_snapshot(reconciliation::Validation {
+        records: &state.receipt_reconciliations,
+        links: &state.inclusion_links,
+        versions: &state.inclusion_link_versions,
+        heads: &state.inclusion_link_heads,
+        reservations: &state.inclusion_reservations,
+        effects: &state.reconciliation_material_effects,
+        receipts: &state.receipts,
+        orders: &state.purchase_order_versions,
+        holdings: &state.holding_versions,
+        observations: &state.stocktake_versions,
+        observation_rows: &state.stocktake_observations,
+        observation_heads: &state.stocktake_heads,
+        productions: &state.productions,
+        production_inputs: &state.production_inputs,
+        production_outputs: &state.production_outputs,
+        wastes: &state.wastes,
+        material_versions: &state.material_versions,
+        business_records: &state.business_records,
+        revisions: &state.business_revisions,
+        confirmations: &state.business_confirmations,
+        mutations: &sale_mutations,
+        sequence,
+    })?;
     waste::validate_snapshot(waste::Validation {
         records: &state.wastes,
         holdings: &state.holding_versions,
@@ -828,7 +877,86 @@ struct ReceiptReferences<'a> {
     materials: &'a [Material],
     material_versions: &'a [MaterialVersion],
     receipts: &'a [crate::receipt::ReceiptRecord],
+    reconciliations: &'a [crate::reconciliation::ReceiptReconciliation],
     purchase_order_versions: &'a [crate::purchase_order::OrderVersion],
+}
+
+#[cfg(test)]
+mod schema10_reader_tests {
+    use super::validate_source;
+    use serde_json::{Value, json};
+
+    fn fixture() -> Value {
+        serde_json::from_str(include_str!(
+            "../../tests/fixtures/snapshot-v2-schema10.json"
+        ))
+        .unwrap()
+    }
+    fn accepts(value: &Value) -> bool {
+        let seq = value["sequence"].as_str().unwrap().parse().unwrap();
+        validate_source(&value.to_string(), seq, 10).is_ok()
+    }
+    #[test]
+    fn schema10_preserves_real_observation_waste_and_original_receipts() {
+        let value = fixture();
+        assert!(accepts(&value));
+        assert!(
+            !value["state"]["stocktake_versions"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        assert!(!value["state"]["wastes"].as_array().unwrap().is_empty());
+        assert!(value["state"].get("receipt_reconciliations").is_none());
+    }
+    #[test]
+    fn schema10_rejects_future_receipt_tags_relations_and_holding_sources() {
+        let original = fixture();
+        let mut changed = original.clone();
+        let receipt = changed["state"]["business_revisions"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|r| r["payload"]["kind"] == "receipt")
+            .unwrap();
+        receipt["payload"]["data"]["stock_effect"] = json!({"kind":"reconciled","selections":[]});
+        assert!(!accepts(&changed));
+        for name in [
+            "receipt_reconciliations",
+            "inclusion_links",
+            "inclusion_link_versions",
+            "inclusion_link_heads",
+            "inclusion_reservations",
+            "reconciliation_material_effects",
+        ] {
+            let mut changed = original.clone();
+            changed["state"][name] = json!([]);
+            assert!(!accepts(&changed), "{name}");
+        }
+        for name in [
+            "reconciliation_effect_id",
+            "baseline_reconciliation_effect_id",
+        ] {
+            let mut changed = original.clone();
+            changed["state"]["holding_versions"][0][name] = Value::Null;
+            assert!(!accepts(&changed), "{name}");
+        }
+        let mut changed = original;
+        changed["schema_version"] = json!(11);
+        assert!(!accepts(&changed));
+    }
+    #[test]
+    fn schema10_nested_observation_and_waste_basis_remain_closed() {
+        let original = fixture();
+        for path in ["stocktake_versions", "wastes"] {
+            let mut changed = original.clone();
+            changed["state"][path][0]["effect"]["after"]["value_delta"] = json!("1");
+            assert!(!accepts(&changed));
+        }
+        let mut changed = original;
+        changed["state"]["wastes"][0]["effect"]["basis_before"]["kind"] = json!("reconciliation");
+        assert!(!accepts(&changed));
+    }
 }
 
 #[cfg(test)]
@@ -1103,8 +1231,21 @@ fn validate_receipt_references(state: ReceiptReferences<'_>) -> Result<(), Store
             }
             _ => false,
         };
+        let reconciliations: Vec<_> = state
+            .reconciliations
+            .iter()
+            .filter(|r| r.receipt_id == receipt.id)
+            .collect();
+        let effect_matches = match &data.stock_effect {
+            ReceiptStockEffectDraft::Unreflected {} => reconciliations.is_empty(),
+            ReceiptStockEffectDraft::Reconciled { .. } => {
+                reconciliations.len() == 1
+                    && reconciliations[0].confirmation_id == receipt.confirmation_id
+            }
+            ReceiptStockEffectDraft::NeedsReconciliation { .. } => false,
+        };
         if !source_matches
-            || !matches!(data.stock_effect, ReceiptStockEffectDraft::Unreflected {})
+            || !effect_matches
             || data.quantity.trim() != receipt.input_quantity
             || data.unit.trim() != receipt.input_unit
             || Unit::parse(&data.unit)

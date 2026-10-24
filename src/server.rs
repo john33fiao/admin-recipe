@@ -234,6 +234,10 @@ pub fn router(state: AppState) -> Router {
         .route("/api/orders/{id}", get(order_detail))
         .route("/api/receipts", get(receipt_list))
         .route("/api/receipts/{id}", get(receipt_detail))
+        .route(
+            "/api/materials/{id}/receipt-inclusion-bases",
+            get(receipt_inclusion_candidates),
+        )
         .route("/api/holdings/{id}", get(holding_detail))
         .route(
             "/api/recipes",
@@ -783,6 +787,17 @@ async fn receipt_detail(
             )
         })?;
     Ok(Json(detail))
+}
+
+async fn receipt_inclusion_candidates(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<impl IntoResponse, ApiError> {
+    Ok(Json(
+        state
+            .with_store(move |s| s.receipt_inclusion_candidates(&id))
+            .await?,
+    ))
 }
 
 async fn holding_detail(

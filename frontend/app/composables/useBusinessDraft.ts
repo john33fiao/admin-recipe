@@ -69,7 +69,7 @@ export function useBusinessDraft<T extends BusinessPayload>(identity: string, in
   watch(completed, () => { void refresh() })
 
   function failed(error: unknown) {
-    recovery.value = error instanceof ApiError ? error.status === 413 && (payload.value.kind === 'production' || payload.value.kind === 'stocktake') ? 'edit' : failureAction(error.status, error.code) : 'retry'
+    recovery.value = error instanceof ApiError ? error.status === 413 && (payload.value.kind === 'production' || payload.value.kind === 'stocktake' || payload.value.kind === 'receipt' && payload.value.data.stock_effect.kind === 'reconciled') ? 'edit' : failureAction(error.status, error.code) : 'retry'
     if (recovery.value === 'refresh') failure.value = '다른 변경으로 자료가 갱신되어 이 요청은 처리하지 않았습니다. 최신 기록을 확인하고 입력과 미리보기를 다시 검토해 주세요.'
     else if (recovery.value === 'blocked') failure.value = '이 요청 ID에 다른 처리 이력이 있어 재전송할 수 없습니다. 업무 기록에서 처리 결과를 확인해 주세요.'
     else if (recovery.value === 'edit') failure.value = error instanceof Error ? error.message : '입력을 확인해 주세요.'
@@ -117,7 +117,7 @@ export function useBusinessDraft<T extends BusinessPayload>(identity: string, in
       preview.value = null
       recovery.value = ''
       const confirmedPayload = response.result.head.payload
-      const confirmed = confirmedPayload.kind === 'stocktake' ? '실사를 확정했습니다. 확인한 수량과 소모·배분 근거를 보관했습니다.' : confirmedPayload.kind === 'waste' ? '폐기·직원식을 확정했습니다. 실제 수량과 원가를 정산 기준에 반영했습니다.' : confirmedPayload.kind === 'catalog_price' ? '가격을 확정했습니다. 확정 기록과 가격을 함께 보관했습니다.' : confirmedPayload.kind === 'receipt' ? '입고를 확정했습니다. 실제 수량과 금액을 정산 기준에 반영했습니다.' : confirmedPayload.kind === 'production' ? '생산을 확정했습니다. 실제 투입과 결과, 원가 배분을 정산 기준에 반영했습니다.' : confirmedPayload.kind === 'sale' ? '판매를 확정했습니다. 당시 레시피와 원가를 보관했습니다. 재고는 차감하지 않았습니다.' : { place: '주문을 확정했습니다. 미입고 내역에서 확인할 수 있습니다.', revise: '주문 수정을 확정했습니다. 이전 주문 내용은 이력에 남아 있습니다.', cancel: '주문 취소를 확정했습니다. 보유 수량과 가격은 바뀌지 않았습니다.' }[confirmedPayload.data.action]
+      const confirmed = confirmedPayload.kind === 'stocktake' ? '실사를 확정했습니다. 확인한 수량과 소모·배분 근거를 보관했습니다.' : confirmedPayload.kind === 'waste' ? '폐기·직원식을 확정했습니다. 실제 수량과 원가를 정산 기준에 반영했습니다.' : confirmedPayload.kind === 'catalog_price' ? '가격을 확정했습니다. 확정 기록과 가격을 함께 보관했습니다.' : confirmedPayload.kind === 'receipt' ? confirmedPayload.data.stock_effect.kind === 'reconciled' ? '입고와 보정을 확정했습니다. 실사 포함 수량을 다시 더하지 않고 차이를 보관했습니다.' : '입고를 확정했습니다. 실제 수량과 금액을 정산 기준에 반영했습니다.' : confirmedPayload.kind === 'production' ? '생산을 확정했습니다. 실제 투입과 결과, 원가 배분을 정산 기준에 반영했습니다.' : confirmedPayload.kind === 'sale' ? '판매를 확정했습니다. 당시 레시피와 원가를 보관했습니다. 재고는 차감하지 않았습니다.' : { place: '주문을 확정했습니다. 미입고 내역에서 확인할 수 있습니다.', revise: '주문 수정을 확정했습니다. 이전 주문 내용은 이력에 남아 있습니다.', cancel: '주문 취소를 확정했습니다. 보유 수량과 가격은 바뀌지 않았습니다.' }[confirmedPayload.data.action]
       notice.value = { create: '초안을 임시 저장했습니다. 앱을 다시 열어도 이어서 작성할 수 있습니다.', revise: '수정 내용을 임시 저장했습니다.', confirm: confirmed, archive: '초안을 보관했습니다. 이전 입력은 이력에 남아 있습니다.' }[request.action]
       completed.value += 1
       return response

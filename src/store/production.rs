@@ -357,6 +357,7 @@ pub(super) fn apply_production(
                 receipt_id: None,
                 production_effect_id: Some(&effect_id),
                 observation_version_id: None,
+                reconciliation_effect_id: None,
                 waste_id: None,
                 before: &before,
                 after: &material.after,

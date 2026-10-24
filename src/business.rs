@@ -274,6 +274,14 @@ pub struct BusinessRevision {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum BusinessResult {
+    ReconciledReceipt {
+        receipt_id: String,
+        reconciliation_id: String,
+        material_id: String,
+        material_version_id: String,
+        order_id: Option<String>,
+        order_version_id: Option<String>,
+    },
     Stocktake {
         stocktake_id: String,
     },
@@ -374,6 +382,9 @@ pub struct BusinessMutation {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum BusinessEffect {
+    ReconciledReceipt {
+        receipt: Box<crate::reconciliation::ReconciledReceiptEffect>,
+    },
     Stocktake {
         rows: Vec<StocktakeRowEffect>,
         unchecked_positions: Vec<usize>,

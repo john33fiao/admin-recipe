@@ -19,12 +19,14 @@ mod production;
 mod purchase_order;
 mod receipt;
 mod recipe;
+mod reconciliation;
 mod sale;
+mod schema;
 mod snapshot;
 mod stocktake;
 mod waste;
 
-const SCHEMA_VERSION: i64 = 10;
+const SCHEMA_VERSION: i64 = 11;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Material {
@@ -178,6 +180,7 @@ impl Store {
     /// Verify retained immutable files and regenerate missing ones, including
     /// published records whose files were lost during a database-only move.
     pub fn recover(&mut self) -> Result<(), StoreError> {
+        reconciliation::validate_physical_columns(&self.connection)?;
         // Hold only record keys in memory; retained full-state payloads may be
         // much larger than the current material list.
         let entries: Vec<(i64, bool)> = self
@@ -318,6 +321,7 @@ fn validate_schema(connection: &Connection) -> anyhow::Result<()> {
     sale::validate_sale_schema(connection)?;
     stocktake::validate_stocktake_schema(connection)?;
     waste::validate_waste_schema(connection)?;
+    reconciliation::validate_reconciliation_schema(connection)?;
     let violation: Option<String> = connection
         .query_row("PRAGMA foreign_key_check", [], |row| row.get(0))
         .optional()?;
@@ -409,6 +413,9 @@ fn migrate(connection: &mut Connection, starting_version: i64) -> anyhow::Result
         stocktake::migrate_stocktakes(&transaction)?;
         waste::migrate_wastes(&transaction)?;
         holding::migrate_observations(&transaction)?;
+    }
+    if version < 11 {
+        schema::migrate_reconciliation(&transaction)?;
     }
     validate_schema(&transaction)?;
     transaction.commit()?;

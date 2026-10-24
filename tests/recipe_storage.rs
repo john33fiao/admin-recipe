@@ -165,7 +165,7 @@ fn schema_six_open_adds_empty_recipe_relations_without_rewriting_retained_data()
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
     assert_eq!(
-        new_schema, 10,
+        new_schema, 11,
         "opening schema6 must install current storage"
     );
     for table in [
@@ -181,10 +181,11 @@ fn schema_six_open_adds_empty_recipe_relations_without_rewriting_retained_data()
     }
     for (table, mut rows) in before {
         if table == "holding_versions" {
-            // Schema8 adds two production references and schema10 adds three
-            // observation/waste references. Original columns stay identical.
+            // Schema8 adds two production references, schema10 adds three
+            // observation/waste references, and schema11 adds two reconciliation
+            // references. Original columns stay identical.
             for row in &mut rows {
-                row.extend(std::iter::repeat_n(SqlValue::Null, 5));
+                row.extend(std::iter::repeat_n(SqlValue::Null, 7));
             }
         }
         assert_eq!(table_rows(&database, &table), rows, "{table}");
@@ -605,7 +606,7 @@ fn schema_six_requests_replay_exactly_and_holding_prices_feed_new_recipe_snapsho
     )
     .unwrap();
     assert_eq!(newest["format_version"], 2);
-    assert_eq!(newest["schema_version"], 10);
+    assert_eq!(newest["schema_version"], 11);
     for key in ["recipe_versions", "recipe_lines", "recipe_heads"] {
         assert_eq!(newest["state"][key].as_array().unwrap().len(), 1);
     }

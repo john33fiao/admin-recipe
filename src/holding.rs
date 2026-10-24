@@ -12,6 +12,7 @@ pub enum HoldingBasisKind {
     Receipt,
     Production,
     Observation,
+    Reconciliation,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -45,11 +46,22 @@ pub enum HoldingChangeKind {
     Receipt,
     Production,
     Waste,
+    Reconciliation,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum HoldingChange {
+    Reconciliation {
+        event_id: String,
+        reconciliation_id: String,
+        receipt_id: String,
+        inflow_quantity: String,
+        inflow_value: String,
+        value_delta: String,
+        recorded_at: String,
+        seq: String,
+    },
     Receipt {
         event_id: String,
         quantity: String,
@@ -82,6 +94,7 @@ impl HoldingChange {
             Self::Receipt { .. } => HoldingChangeKind::Receipt,
             Self::Production { .. } => HoldingChangeKind::Production,
             Self::Waste { .. } => HoldingChangeKind::Waste,
+            Self::Reconciliation { .. } => HoldingChangeKind::Reconciliation,
         }
     }
     pub fn event_id(&self) -> &str {
@@ -89,6 +102,7 @@ impl HoldingChange {
             Self::Receipt { event_id, .. }
             | Self::Production { event_id, .. }
             | Self::Waste { event_id, .. } => event_id,
+            Self::Reconciliation { event_id, .. } => event_id,
         }
     }
     pub fn recorded_at(&self) -> &str {
@@ -96,6 +110,7 @@ impl HoldingChange {
             Self::Receipt { recorded_at, .. }
             | Self::Production { recorded_at, .. }
             | Self::Waste { recorded_at, .. } => recorded_at,
+            Self::Reconciliation { recorded_at, .. } => recorded_at,
         }
     }
     pub fn seq(&self) -> &str {
@@ -103,6 +118,7 @@ impl HoldingChange {
             Self::Receipt { seq, .. } | Self::Production { seq, .. } | Self::Waste { seq, .. } => {
                 seq
             }
+            Self::Reconciliation { seq, .. } => seq,
         }
     }
 }
@@ -231,7 +247,12 @@ pub fn validate_holding_input(input: &HoldingInput) -> Result<(), DomainError> {
         return Err(invalid("확인한 수량 0의 보유 가치도 0이어야 합니다"));
     }
     match (basis.kind, &input.observation) {
-        (HoldingBasisKind::Receipt | HoldingBasisKind::Production, None) => {}
+        (
+            HoldingBasisKind::Receipt
+            | HoldingBasisKind::Production
+            | HoldingBasisKind::Reconciliation,
+            None,
+        ) => {}
         (HoldingBasisKind::Observation, Some(observation)) => {
             valid_id(&observation.id)?;
             sequence(&observation.seq)?;
@@ -331,6 +352,35 @@ fn change_amounts(
     let zero_q = Quantity::from_micros(0)?;
     let zero_v = Money::from_micros(0)?;
     match change {
+        HoldingChange::Reconciliation {
+            reconciliation_id,
+            receipt_id,
+            inflow_quantity,
+            inflow_value,
+            value_delta,
+            ..
+        } => {
+            valid_id(reconciliation_id)?;
+            valid_id(receipt_id)?;
+            let q = Quantity::parse(inflow_quantity)?;
+            let inflow = Money::parse(inflow_value)?;
+            let negative = value_delta.starts_with('-');
+            let delta = Money::parse(value_delta.strip_prefix('-').unwrap_or(value_delta))?;
+            if (q.micros() == 0 && inflow.micros() != 0) || (negative && delta.micros() == 0) {
+                return Err(invalid("보정 유입 수량·가치와 부호를 확인해 주세요"));
+            }
+            let out = if negative {
+                inflow
+            } else {
+                Money::from_micros(
+                    inflow
+                        .micros()
+                        .checked_add(delta.micros())
+                        .ok_or_else(|| invalid("보정 가치 범위를 넘습니다"))?,
+                )?
+            };
+            Ok((zero_q, if negative { delta } else { zero_v }, q, out))
+        }
         HoldingChange::Waste {
             quantity,
             loss_value,
@@ -463,6 +513,7 @@ pub fn project_holding(
             let kind = match change.kind() {
                 HoldingChangeKind::Receipt => HoldingBasisKind::Receipt,
                 HoldingChangeKind::Production => HoldingBasisKind::Production,
+                HoldingChangeKind::Reconciliation => HoldingBasisKind::Reconciliation,
                 HoldingChangeKind::Waste => {
                     return Err(invalid("폐기는 시작 기준을 만들 수 없습니다"));
                 }
@@ -511,6 +562,7 @@ pub fn project_holding(
                 kind: match change.kind() {
                     HoldingChangeKind::Receipt => HoldingBasisKind::Receipt,
                     HoldingChangeKind::Production => HoldingBasisKind::Production,
+                    HoldingChangeKind::Reconciliation => HoldingBasisKind::Reconciliation,
                     HoldingChangeKind::Waste => {
                         return Err(invalid("폐기는 시작 기준을 만들 수 없습니다"));
                     }

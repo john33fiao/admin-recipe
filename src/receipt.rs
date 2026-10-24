@@ -3,6 +3,9 @@ use crate::{
     catalog::CatalogState,
     domain::DomainError,
     purchase_order::{OrderReceiptClosure, OrderStatus},
+    reconciliation::{
+        ReceiptInclusionSelection, ReceiptReconciliation, normalize_receipt_inclusions,
+    },
 };
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
@@ -28,6 +31,9 @@ pub enum ReceiptStockEffectDraft {
     NeedsReconciliation {
         basis_id: Option<String>,
         included_quantity: String,
+    },
+    Reconciled {
+        selections: Vec<ReceiptInclusionSelection>,
     },
 }
 
@@ -76,6 +82,9 @@ pub fn normalize_receipt_draft(data: &mut DraftReceiptV1) -> Result<(), DomainEr
             normalize_draft_uuid(id, "포함 근거 ID")?;
         }
         validate_draft_text(included_quantity, "이미 포함된 수량", 80, false)?;
+    }
+    if let ReceiptStockEffectDraft::Reconciled { selections } = &mut data.stock_effect {
+        normalize_receipt_inclusions(selections)?;
     }
     data.note = data.note.replace("\r\n", "\n").replace('\r', "\n");
     for (label, text, limit, multiline) in [
@@ -166,8 +175,10 @@ pub struct ReceiptList {
 #[serde(deny_unknown_fields)]
 pub struct ReceiptDetail {
     pub item: ReceiptRecord,
-    pub holding_version_id: String,
+    pub holding_version_id: Option<String>,
     pub order_closure: Option<OrderReceiptClosure>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reconciliation: Option<ReceiptReconciliation>,
     pub state: CatalogState,
 }
 

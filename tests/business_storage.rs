@@ -206,7 +206,7 @@ fn publication_failure_and_missing_file_recover_original_response_once() {
     .unwrap();
     let bytes = fs::read(&destination).unwrap();
     let snapshot: Value = serde_json::from_slice(&bytes).unwrap();
-    assert_eq!(snapshot["schema_version"], 10);
+    assert_eq!(snapshot["schema_version"], 11);
     assert_eq!(
         snapshot["state"]["business_confirmations"]
             .as_array()
@@ -689,7 +689,7 @@ fn schema_three_migration_preserves_old_ids_responses_and_snapshot_bytes() {
         &fs::read(root.path().join(format!("snapshots/{seq:020}.json"))).unwrap(),
     )
     .unwrap();
-    assert_eq!(newest["schema_version"], 10);
+    assert_eq!(newest["schema_version"], 11);
     assert_eq!(
         newest["state"]["business_records"][0]["id"],
         saved["result"]["item"]["id"]

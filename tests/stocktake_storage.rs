@@ -247,8 +247,8 @@ fn schema_nine_open_adds_observations_without_rewriting_sales_or_holding_referen
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
     assert_eq!(
-        new_schema, 10,
-        "opening schema9 must install stocktake storage"
+        new_schema, 11,
+        "opening schema9 must install current storage"
     );
     for table in [
         "stocktake_batches",

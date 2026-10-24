@@ -307,3 +307,25 @@ a.material-row:hover { background: var(--soft); }
 .stocktake-results .history-list, .sale-consumption .history-list { margin-block: 14px; }
 .stocktake-result, .stock-row, .stock-context, .stock-value-section { min-width: 0; overflow-wrap: anywhere; }
 @media (max-width: 480px) { .stocktake-result .stocktake-fields > div, .waste-result .stocktake-fields > div, .stocktake-detail > dl > div, .waste-detail > dl > div { grid-template-columns: 1fr; gap: 5px; } .stock-context, .stock-value-section { padding: 12px; } }
+
+.receipt-inclusions { margin-block: 24px; }
+.receipt-inclusion-row { min-width: 0; border: 1px solid var(--line); border-radius: 10px; padding: 20px; margin-block: 20px; }
+.receipt-inclusion-row legend { font-weight: 650; padding-inline: 7px; }
+.receipt-inclusion-evidence { padding: 14px; margin-bottom: 18px; background: var(--soft); border-radius: 7px; }
+.receipt-inclusion-evidence p + p { margin-top: 5px; }
+.receipt-inclusions .holding-references { margin-block: 16px; }
+.receipt-inclusions select { text-overflow: ellipsis; }
+.receipt-reconciliation-result { display: grid; gap: 28px; margin-block: 20px; }
+.receipt-reconciliation-result section, .receipt-inclusion-row { overflow-wrap: anywhere; }
+.receipt-reconciliation-result h3 { margin-bottom: 12px; }
+.receipt-reconciliation-result h4 { margin: 0 0 10px; }
+.reconciliation-fields { display: grid; gap: 12px; margin-block: 14px; }
+.receipt-reconciliation-result .reconciliation-fields > div { display: grid; grid-template-columns: minmax(130px, 180px) minmax(0, 1fr); gap: 16px; }
+.reconciliation-fields dt { color: var(--muted); }
+.reconciliation-fields dd { margin: 0; overflow-wrap: anywhere; }
+.reconciliation-material, .reconciliation-selection { padding-top: 18px; margin-top: 18px; border-top: 1px solid var(--line); }
+.reconciliation-trace .history-list { margin-top: 16px; }
+@media (max-width: 480px) {
+  .receipt-inclusion-row { padding: 14px; }
+  .receipt-reconciliation-result .reconciliation-fields > div { grid-template-columns: minmax(0, 1fr); gap: 5px; }
+}

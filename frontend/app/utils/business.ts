@@ -3,7 +3,7 @@ import type { BusinessPayload, BusinessPending, BusinessPreview, CatalogPricePay
 import type { CatalogState } from '../types/material.ts'
 import { validProductionShape, validateProductionDraft } from './production.ts'
 import { validSaleShape, validateSaleDraft } from './sale.ts'
-import { validReceiptShape, validateReceiptDraft } from './receipt.ts'
+import { copyReceiptStockEffect, validReceiptShape, validateReceiptDraft } from './receipt.ts'
 
 export const businessStatuses = { draft: '임시 저장', confirmed: '확정', archived: '보관' }
 export const blankPriceDraft = (): CatalogPricePayload => ({ kind: 'catalog_price', version: 1, data: { material_id: null, material_version_id: null, quantity: '', unit: 'g', amount: '', note: '' } })
@@ -29,7 +29,7 @@ export function validateBusinessDraft(payload: BusinessPayload): Record<string, 
 }
 
 export function copyPayload<T extends BusinessPayload>(payload: T): T {
-  const data = payload.kind === 'stocktake' ? { ...payload.data, rows: payload.data.rows.map(row => ({ ...row, initial_value: copyValuation(row.initial_value), excess: row.excess == null ? row.excess : { ...row.excess, value: copyValuation(row.excess.value) } })) } : payload.kind === 'receipt' ? { ...payload.data, source: { ...payload.data.source }, stock_effect: { ...payload.data.stock_effect } } : payload.kind === 'production' ? { ...payload.data, inputs: payload.data.inputs.map(row => ({ ...row })), outputs: payload.data.outputs.map(row => ({ ...row })) } : { ...payload.data }
+  const data = payload.kind === 'stocktake' ? { ...payload.data, rows: payload.data.rows.map(row => ({ ...row, initial_value: copyValuation(row.initial_value), excess: row.excess == null ? row.excess : { ...row.excess, value: copyValuation(row.excess.value) } })) } : payload.kind === 'receipt' ? { ...payload.data, source: { ...payload.data.source }, stock_effect: copyReceiptStockEffect(payload.data.stock_effect) } : payload.kind === 'production' ? { ...payload.data, inputs: payload.data.inputs.map(row => ({ ...row })), outputs: payload.data.outputs.map(row => ({ ...row })) } : { ...payload.data }
   return { kind: payload.kind, version: payload.version, data } as T
 }
 function sameValue(a: unknown, b: unknown): boolean {
