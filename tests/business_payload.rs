@@ -270,3 +270,75 @@ fn sale_drafts_preserve_zero_and_incomplete_counts_without_accepting_extra_input
         }
     }
 }
+
+#[test]
+fn stocktake_nested_confirmation_preserves_zero_and_closes_each_input_shape() {
+    let mut value = input();
+    value["payload"] = json!({"kind":"stocktake","version":1,"data":{"rows":[{
+        "material_id":null,"material_version_id":null,"quantity":"0","unit":"g",
+        "initial_value":{"kind":"manual_amount","amount":"0"},
+        "excess":{"reviewed":false,"reason":"확인\r\n대기","value":{"kind":"existing_price"}}
+    }],"note":"가상\r\n실사"}});
+    let decoded: CreateBusinessDraft = serde_json::from_value(value.clone()).unwrap();
+    let normalized =
+        serde_json::to_value(normalize_business_payload(decoded.payload).unwrap()).unwrap();
+    assert_eq!(
+        normalized["data"]["rows"][0]["initial_value"]["amount"],
+        "0"
+    );
+    assert_eq!(
+        normalized["data"]["rows"][0]["excess"]["reason"],
+        "확인\n대기"
+    );
+    for path in [
+        "/payload",
+        "/payload/data",
+        "/payload/data/rows/0",
+        "/payload/data/rows/0/initial_value",
+        "/payload/data/rows/0/excess",
+        "/payload/data/rows/0/excess/value",
+    ] {
+        let mut bad = value.clone();
+        bad.pointer_mut(path)
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .insert("unexpected".into(), json!(true));
+        assert!(
+            serde_json::from_value::<CreateBusinessDraft>(bad).is_err(),
+            "{path}"
+        );
+    }
+    for (path, replacement) in [
+        ("/payload/version", json!(2)),
+        ("/payload/data/rows/0/quantity", json!(0)),
+        ("/payload/data/rows/0/initial_value/amount", json!(0)),
+        ("/payload/data/rows/0/excess/reviewed", json!("true")),
+    ] {
+        let mut bad = value.clone();
+        *bad.pointer_mut(path).unwrap() = replacement;
+        assert!(
+            serde_json::from_value::<CreateBusinessDraft>(bad).is_err(),
+            "{path}"
+        );
+    }
+}
+
+#[test]
+fn waste_kind_preserves_incomplete_measurement_and_rejects_unknown_reasons() {
+    let mut value = input();
+    value["payload"] = json!({"kind":"waste","version":1,"data":{"material_id":null,"material_version_id":null,"quantity":"1.","unit":"g","reason":"staff_meal","note":"가상\r\n직원식"}});
+    let decoded: CreateBusinessDraft = serde_json::from_value(value.clone()).unwrap();
+    let normalized =
+        serde_json::to_value(normalize_business_payload(decoded.payload).unwrap()).unwrap();
+    assert_eq!(normalized["data"]["quantity"], "1.");
+    assert_eq!(normalized["data"]["note"], "가상\n직원식");
+    for reason in ["consumption", "loss", "refund"] {
+        let mut bad = value.clone();
+        bad["payload"]["data"]["reason"] = json!(reason);
+        assert!(serde_json::from_value::<CreateBusinessDraft>(bad).is_err());
+    }
+    let mut bad = value;
+    bad["payload"]["data"]["loss_value"] = json!("0");
+    assert!(serde_json::from_value::<CreateBusinessDraft>(bad).is_err());
+}

@@ -291,3 +291,19 @@ a.material-row:hover { background: var(--soft); }
 .sale-cost-snapshot h3 { margin: 0 0 12px; }
 .sale-list li, .sale-totals dd { overflow-wrap: anywhere; }
 @media (max-width: 480px) { .sale-detail dl > div { grid-template-columns: minmax(0, 1fr); gap: 5px; } }
+
+/* Stock observations keep measured quantities separate from settlement values. */
+.stock-context, .stock-value-section { padding: 16px; margin-block: 14px; border: 1px solid var(--line); border-radius: 12px; }
+.stock-context p, .stock-value-section p { margin-block: 8px; }
+.stock-check { display: flex; align-items: flex-start; gap: 10px; margin-block: 12px; }
+.stock-check input { width: 20px; height: 20px; flex: 0 0 20px; margin-top: 3px; }
+.stock-value-input { display: grid; gap: 10px; }
+.stocktake-result + .stocktake-result { margin-top: 24px; padding-top: 24px; border-top: 1px solid var(--line); }
+.stocktake-fields { display: grid; gap: 12px; margin-block: 16px; }
+.stocktake-result .stocktake-fields > div, .waste-result .stocktake-fields > div { display: grid; grid-template-columns: minmax(120px, 160px) minmax(0, 1fr); gap: 14px; }
+.stocktake-fields dt { color: var(--muted); }
+.stocktake-fields dd { margin: 0; overflow-wrap: anywhere; }
+.stocktake-results h3, .sale-consumption li > div { display: flex; align-items: flex-start; gap: 10px; flex-wrap: wrap; }
+.stocktake-results .history-list, .sale-consumption .history-list { margin-block: 14px; }
+.stocktake-result, .stock-row, .stock-context, .stock-value-section { min-width: 0; overflow-wrap: anywhere; }
+@media (max-width: 480px) { .stocktake-result .stocktake-fields > div, .waste-result .stocktake-fields > div, .stocktake-detail > dl > div, .waste-detail > dl > div { grid-template-columns: 1fr; gap: 5px; } .stock-context, .stock-value-section { padding: 12px; } }

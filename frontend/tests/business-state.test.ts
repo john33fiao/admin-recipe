@@ -9,6 +9,7 @@ import { failureAction } from '../app/utils/catalog.ts'
 import { ApiError } from '../app/utils/api.ts'
 import { blankSaleDraft } from '../app/utils/sale.ts'
 import { blankProductionDraft, blankProductionOutput } from '../app/utils/production.ts'
+import { blankStocktakeDraft, blankWasteDraft } from '../app/utils/stocktake.ts'
 
 const recordId = '00000000-0000-4000-8000-000000000001'
 const headId = '00000000-0000-4000-8000-000000000002'
@@ -324,5 +325,64 @@ test('sale count edit invalidates preview and confirmation retry preserves froze
     const retry = editor.send('confirm'); assert.equal(JSON.stringify(h.requests[3]!.body), original); assert.equal(JSON.parse(original).meta.expected_revision, '10')
     h.requests[3]!.resolve({ result: { item: { ...item, kind: 'sale', status: 'confirmed' }, head: { ...head, payload: sale, status: 'confirmed' }, issues: [] }, state: { epoch, revision: '11' } }); await retry
     assert.equal(editor.status.value, 'confirmed'); assert.equal(editor.payload.value.data.recipe_version_id, requestId); assert.equal(editor.pending.value, null)
+  } finally { scope.stop() }
+})
+
+
+test('stocktake nested valuation edits invalidate preview while retry restores exact rows and alias', async () => {
+  const h = harness(), scope = vue.effectScope(), stock = blankStocktakeDraft()
+  Object.assign(stock.data.rows[0]!, { material_id: recordId, material_version_id: headId, quantity: '0', initial_value: { kind: 'manual_amount', amount: '0' }, excess: { reviewed: false, reason: '', value: { kind: 'manual_amount', amount: '' } } })
+  const seed = { ...initial, payload: stock }
+  try {
+    const editor = scope.run(() => h.create(recordId, seed, async () => null))!
+    const showing = editor.showPreview(); h.requests[0]!.resolve({ record_id: recordId, head_id: headId, state: { epoch, revision: '9' }, can_confirm: true, issues: [], effect: { kind: 'stocktake', rows: [], unchecked_positions: [] } }); await showing
+    editor.payload.value.data.rows[0].excess.value.amount = '1.'
+    assert.equal(editor.dirty.value, true); assert.equal(editor.preview.value, null)
+    assert.equal(stock.data.rows[0]!.excess!.value!.kind === 'manual_amount' && stock.data.rows[0]!.excess!.value!.amount, '')
+    const sending = editor.send('revise'), original = JSON.stringify(h.requests[1]!.body)
+    assert.equal(h.requests[1]!.path, '/api/stocktake-drafts/' + recordId + '/revisions')
+    editor.payload.value.data.rows[0].excess.value.amount = '5'
+    assert.equal(JSON.stringify(h.requests[1]!.body), original)
+    h.requests[1]!.reject(new ApiError(503, 'uncertain', 'unavailable')); await sending
+    const fresh = harness(); for (const [key, value] of h.storage) fresh.storage.set(key, value)
+    const recovered = scope.run(() => fresh.create(recordId, seed, async () => null))!
+    assert.equal(recovered.payload.value.data.rows[0].excess.value.amount, '1.')
+    assert.equal(recovered.locked.value, true)
+    const retry = recovered.send('revise'); assert.equal(JSON.stringify(fresh.requests[0]!.body), original)
+    fresh.requests[0]!.reject(new ApiError(503, 'uncertain', 'unavailable')); await retry
+  } finally { scope.stop() }
+})
+
+test('stocktake 413 preserves original create until explicit review and waste uses common endpoint', async () => {
+  for (const value of [blankStocktakeDraft(), blankWasteDraft()]) {
+    const h = harness(), scope = vue.effectScope()
+    try {
+      const editor = scope.run(() => h.create('new.stock', { ...initial, payload: value, recordId: null, headId: null }, async () => null))!
+      const sending = editor.send('create'), raw = JSON.stringify(editor.pending.value)
+      assert.equal(h.requests[0]!.path, value.kind === 'stocktake' ? '/api/stocktake-drafts' : '/api/business/drafts')
+      h.requests[0]!.reject(new ApiError(413, '입력이 너무 큽니다', 'validation')); await sending
+      assert.equal(JSON.stringify(editor.pending.value), raw)
+      assert.equal(editor.canReview.value, value.kind === 'stocktake')
+      if (value.kind === 'stocktake') {
+        const reviewing = editor.review(); h.requests[1]!.resolve({ epoch, revision: '12' }); await reviewing
+        assert.equal(editor.pending.value, null); assert.equal(editor.payload.value.data.rows[0].quantity, '')
+        const again = editor.send('create'); assert.equal((h.requests[2]!.body as any).meta.expected_revision, '12')
+        h.requests[2]!.reject(new ApiError(503, 'uncertain', 'unavailable')); await again
+      }
+    } finally { scope.stop() }
+  }
+})
+
+test('stocktake stale branch review keeps the entered initial and excess confirmations', async () => {
+  const h = harness(), scope = vue.effectScope(), stock = blankStocktakeDraft()
+  Object.assign(stock.data.rows[0]!, { quantity: '0', initial_value: { kind: 'manual_amount', amount: '0' }, excess: { reviewed: true, reason: '입고 누락 확인', value: null } })
+  const latest = { item, head: { ...head, payload: blankStocktakeDraft() }, issues: [], state: { epoch, revision: '11' } }
+  try {
+    const editor = scope.run(() => h.create(recordId, { ...initial, payload: stock }, async () => latest))!
+    const sending = editor.send('revise'); h.requests[0]!.reject(new ApiError(409, 'stale', 'stale_state')); await sending
+    await editor.review()
+    assert.equal(editor.payload.value.data.rows[0].initial_value.amount, '0')
+    assert.equal(editor.payload.value.data.rows[0].excess.reason, '입고 누락 확인')
+    assert.equal(editor.dirty.value, true); assert.equal(editor.pending.value, null); assert.equal(editor.preview.value, null)
   } finally { scope.stop() }
 })

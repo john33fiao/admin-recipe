@@ -1,4 +1,5 @@
 import type { SalePayload } from '../types/sale.ts'
+export const saleConsumptionLabels = { unconfirmed: '실사 소모 미확정', partially_settled: '일부 품목 정산됨', settled: '실사 정산됨', not_applicable: '직접 구성 재료 없음' }
 export const blankSaleDraft = (): SalePayload => ({ kind: 'sale', version: 1, data: { material_id: null, material_version_id: null, recipe_version_id: null, count: '', note: '' } })
 export function validSaleShape(data: Record<string, unknown>) { const keys = ['material_id', 'material_version_id', 'recipe_version_id', 'count', 'note']; return Object.keys(data).length === keys.length && keys.every(key => Object.hasOwn(data, key)) }
 export function validateSaleDraft(payload: SalePayload) {

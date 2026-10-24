@@ -1,4 +1,4 @@
-use super::{Store, StoreError, catalog, production, unavailable};
+use super::{Store, StoreError, catalog, production, stocktake, unavailable};
 use crate::{
     domain::{Money, Quantity, ResolvedPrice, UnitPrice},
     holding::*,
@@ -34,6 +34,9 @@ pub(super) struct HoldingVersion {
     pub baseline_receipt_id: Option<String>,
     pub production_effect_id: Option<String>,
     pub baseline_production_effect_id: Option<String>,
+    pub observation_version_id: Option<String>,
+    pub baseline_observation_version_id: Option<String>,
+    pub waste_id: Option<String>,
     pub baseline_seq: String,
     pub quantity: String,
     pub value: String,
@@ -45,7 +48,7 @@ pub(super) struct HoldingVersion {
 pub(super) struct HoldingHead {
     pub material_id: String,
     pub current_version_id: String,
-    pub last_valid_version_id: String,
+    pub last_valid_version_id: Option<String>,
 }
 
 pub(super) fn versions(
@@ -60,8 +63,8 @@ fn read_versions(
     material: Option<&str>,
     id: Option<&str>,
 ) -> Result<Vec<HoldingVersion>, StoreError> {
-    let rows=connection.prepare("SELECT id,material_id,material_version_id,previous_version_id,receipt_id,baseline_receipt_id,baseline_sequence,quantity_micros,value_micros,recorded_at,sequence,production_effect_id,baseline_production_effect_id FROM holding_versions WHERE (?1 IS NULL OR material_id=?1) AND (?2 IS NULL OR id=?2) ORDER BY sequence,id").map_err(unavailable)?
-        .query_map(params![material,id], |r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,Option<String>>(3)?,r.get::<_,Option<String>>(4)?,r.get::<_,Option<String>>(5)?,r.get::<_,i64>(6)?,r.get::<_,i64>(7)?,r.get::<_,i64>(8)?,r.get::<_,String>(9)?,r.get::<_,i64>(10)?,r.get::<_,Option<String>>(11)?,r.get::<_,Option<String>>(12)?)))
+    let rows=connection.prepare("SELECT id,material_id,material_version_id,previous_version_id,receipt_id,baseline_receipt_id,baseline_sequence,quantity_micros,value_micros,recorded_at,sequence,production_effect_id,baseline_production_effect_id,observation_version_id,baseline_observation_version_id,waste_id FROM holding_versions WHERE (?1 IS NULL OR material_id=?1) AND (?2 IS NULL OR id=?2) ORDER BY sequence,id").map_err(unavailable)?
+        .query_map(params![material,id], |r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,Option<String>>(3)?,r.get::<_,Option<String>>(4)?,r.get::<_,Option<String>>(5)?,r.get::<_,i64>(6)?,r.get::<_,i64>(7)?,r.get::<_,i64>(8)?,r.get::<_,String>(9)?,r.get::<_,i64>(10)?,r.get::<_,Option<String>>(11)?,r.get::<_,Option<String>>(12)?,r.get::<_,Option<String>>(13)?,r.get::<_,Option<String>>(14)?,r.get::<_,Option<String>>(15)?)))
         .map_err(unavailable)?.collect::<rusqlite::Result<Vec<_>>>().map_err(unavailable)?;
     rows.into_iter()
         .map(
@@ -79,6 +82,9 @@ fn read_versions(
                 seq,
                 production_effect_id,
                 baseline_production_effect_id,
+                observation_version_id,
+                baseline_observation_version_id,
+                waste_id,
             )| {
                 Ok(HoldingVersion {
                     id,
@@ -89,6 +95,9 @@ fn read_versions(
                     baseline_receipt_id,
                     production_effect_id,
                     baseline_production_effect_id,
+                    observation_version_id,
+                    baseline_observation_version_id,
+                    waste_id,
                     baseline_seq: baseline_seq.to_string(),
                     quantity: Quantity::from_micros(q).map_err(unavailable)?.decimal(),
                     value: Money::from_micros(v).map_err(unavailable)?.decimal(),
@@ -109,30 +118,47 @@ pub(super) fn current_input(
     connection: &Connection,
     material_id: &str,
 ) -> Result<HoldingInput, StoreError> {
-    let row=connection.query_row("SELECT current_version_id,last_valid_version_id FROM holding_heads WHERE material_id=?1",[material_id],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?))).optional().map_err(unavailable)?;
+    let row=connection.query_row("SELECT current_version_id,last_valid_version_id FROM holding_heads WHERE material_id=?1",[material_id],|r|Ok((r.get::<_,String>(0)?,r.get::<_,Option<String>>(1)?))).optional().map_err(unavailable)?;
     let Some((id, last)) = row else {
         return Ok(HoldingInput::default());
     };
     let version = read_versions(connection, Some(material_id), Some(&id))?
         .pop()
         .ok_or_else(|| unavailable("현재 보유 버전이 없습니다"))?;
-    let last = read_versions(connection, Some(material_id), Some(&last))?
-        .pop()
-        .ok_or_else(|| unavailable("마지막 유효 보유 버전이 없습니다"))?;
+    let last = last
+        .as_deref()
+        .map(|id| {
+            read_versions(connection, Some(material_id), Some(id))?
+                .pop()
+                .ok_or_else(|| unavailable("마지막 유효 보유 버전이 없습니다"))
+        })
+        .transpose()?;
     let input = HoldingInput {
         basis: Some(basis(&version)?),
-        observation: None,
+        observation: version
+            .baseline_observation_version_id
+            .as_ref()
+            .map(|id| {
+                stocktake::versions(connection)?
+                    .iter()
+                    .find(|v| &v.id == id)
+                    .map(stocktake::observation)
+                    .ok_or_else(|| unavailable("보유 관측 기준이 없습니다"))
+            })
+            .transpose()?,
         quantity: Some(Quantity::parse(&version.quantity).map_err(unavailable)?),
         value: Some(Money::parse(&version.value).map_err(unavailable)?),
         source_id: Some(id),
-        last_valid: Some(
-            UnitPrice::new(
-                Money::parse(&last.value).map_err(unavailable)?,
-                Quantity::parse(&last.quantity).map_err(unavailable)?,
-                last.id,
-            )
-            .map_err(unavailable)?,
-        ),
+        last_valid: last
+            .map(|last| {
+                UnitPrice::new(
+                    Money::parse(&last.value).map_err(unavailable)?,
+                    Quantity::parse(&last.quantity).map_err(unavailable)?,
+                    last.id,
+                )
+                .map_err(unavailable)
+            })
+            .transpose()?,
     };
     validate_holding_input(&input).map_err(unavailable)?;
     Ok(input)
@@ -142,9 +168,11 @@ pub(super) fn basis(version: &HoldingVersion) -> Result<HoldingBasisRef, StoreEr
     let (kind, id) = match (
         &version.baseline_receipt_id,
         &version.baseline_production_effect_id,
+        &version.baseline_observation_version_id,
     ) {
-        (Some(id), None) => (HoldingBasisKind::Receipt, id),
-        (None, Some(id)) => (HoldingBasisKind::Production, id),
+        (Some(id), None, None) => (HoldingBasisKind::Receipt, id),
+        (None, Some(id), None) => (HoldingBasisKind::Production, id),
+        (None, None, Some(id)) => (HoldingBasisKind::Observation, id),
         _ => return Err(unavailable("보유 시작 기준의 원천이 올바르지 않습니다")),
     };
     Ok(HoldingBasisRef {
@@ -160,6 +188,54 @@ pub(super) fn amounts(version: &HoldingVersion) -> HoldingAmounts {
         value: Some(version.value.clone()),
         source_id: Some(version.id.clone()),
     }
+}
+
+pub(super) fn input_from_history(
+    versions: &[HoldingVersion],
+    observations: &[stocktake::VersionRow],
+    version: Option<&HoldingVersion>,
+) -> Result<HoldingInput, StoreError> {
+    let Some(version) = version else {
+        return Ok(HoldingInput::default());
+    };
+    let seq = version.seq.parse::<i64>().map_err(unavailable)?;
+    let last = versions
+        .iter()
+        .filter(|v| {
+            v.material_id == version.material_id
+                && v.seq.parse::<i64>().is_ok_and(|s| s <= seq)
+                && Quantity::parse(&v.quantity).is_ok_and(|q| q.micros() > 0)
+        })
+        .max_by_key(|v| v.seq.parse::<i64>().unwrap_or(0));
+    let input = HoldingInput {
+        basis: Some(basis(version)?),
+        observation: version
+            .baseline_observation_version_id
+            .as_ref()
+            .map(|id| {
+                observations
+                    .iter()
+                    .find(|v| &v.id == id)
+                    .map(stocktake::observation)
+                    .ok_or_else(|| unavailable("보유 관측 기준이 없습니다"))
+            })
+            .transpose()?,
+        quantity: Some(Quantity::parse(&version.quantity).map_err(unavailable)?),
+        value: Some(Money::parse(&version.value).map_err(unavailable)?),
+        source_id: Some(version.id.clone()),
+        last_valid: last
+            .map(|v| {
+                UnitPrice::new(
+                    Money::parse(&v.value)?,
+                    Quantity::parse(&v.quantity)?,
+                    v.id.clone(),
+                )
+            })
+            .transpose()
+            .map_err(unavailable)?,
+    };
+    validate_holding_input(&input).map_err(unavailable)?;
+    Ok(input)
 }
 
 pub(super) fn effect_holdings(
@@ -228,6 +304,8 @@ pub(super) fn apply_receipt(
             material_version_id,
             receipt_id: Some(receipt_id),
             production_effect_id: None,
+            waste_id: None,
+            observation_version_id: None,
             before: &before,
             after: &projected.after,
             seq,
@@ -241,6 +319,8 @@ pub(super) struct AppendHolding<'a> {
     pub material_version_id: &'a str,
     pub receipt_id: Option<&'a str>,
     pub production_effect_id: Option<&'a str>,
+    pub waste_id: Option<&'a str>,
+    pub observation_version_id: Option<&'a str>,
     pub before: &'a HoldingInput,
     pub after: &'a HoldingAmounts,
     pub seq: i64,
@@ -256,33 +336,38 @@ pub(super) fn append(
         material_version_id,
         receipt_id,
         production_effect_id,
+        waste_id,
+        observation_version_id,
         before,
         after,
         seq,
         time,
     } = input;
     let id = Uuid::new_v4().to_string();
-    let (baseline_receipt, baseline_production, boundary) = match before.basis.as_ref() {
-        Some(b) => {
-            let source =
-                b.id.as_deref()
-                    .ok_or_else(|| unavailable("보유 기준 ID가 없습니다"))?;
-            let boundary = b
-                .seq
-                .as_deref()
-                .ok_or_else(|| unavailable("보유 기준 순번이 없습니다"))?
-                .parse::<i64>()
-                .map_err(unavailable)?;
-            match b.kind {
-                HoldingBasisKind::Receipt => (Some(source), None, boundary),
-                HoldingBasisKind::Production => (None, Some(source), boundary),
-                HoldingBasisKind::Observation => {
-                    return Err(unavailable("실제 관측 저장은 아직 지원하지 않습니다"));
+    let (baseline_receipt, baseline_production, baseline_observation, boundary) =
+        if let Some(observation) = observation_version_id {
+            (None, None, Some(observation), seq)
+        } else {
+            match before.basis.as_ref() {
+                Some(b) => {
+                    let source =
+                        b.id.as_deref()
+                            .ok_or_else(|| unavailable("보유 기준 ID가 없습니다"))?;
+                    let boundary = b
+                        .seq
+                        .as_deref()
+                        .ok_or_else(|| unavailable("보유 기준 순번이 없습니다"))?
+                        .parse::<i64>()
+                        .map_err(unavailable)?;
+                    match b.kind {
+                        HoldingBasisKind::Receipt => (Some(source), None, None, boundary),
+                        HoldingBasisKind::Production => (None, Some(source), None, boundary),
+                        HoldingBasisKind::Observation => (None, None, Some(source), boundary),
+                    }
                 }
+                None => (receipt_id, production_effect_id, None, seq),
             }
-        }
-        None => (receipt_id, production_effect_id, seq),
-    };
+        };
     let q = Quantity::parse(&after.quantity).map_err(unavailable)?;
     let v = Money::parse(
         after
@@ -292,20 +377,18 @@ pub(super) fn append(
     )
     .map_err(unavailable)?;
     let last = if q.micros() > 0 {
-        id.as_str()
+        Some(id.as_str())
     } else if before.quantity.as_ref().is_some_and(|q| q.micros() > 0) {
-        before
-            .source_id
-            .as_deref()
-            .ok_or_else(|| unavailable("현재 양수 보유의 근거가 없습니다"))?
+        Some(
+            before
+                .source_id
+                .as_deref()
+                .ok_or_else(|| unavailable("현재 양수 보유의 근거가 없습니다"))?,
+        )
     } else {
-        before
-            .last_valid
-            .as_ref()
-            .map(UnitPrice::source_id)
-            .ok_or_else(|| unavailable("0재고의 마지막 유효 단가가 없습니다"))?
+        before.last_valid.as_ref().map(UnitPrice::source_id)
     };
-    connection.execute("INSERT INTO holding_versions(id,material_id,material_version_id,previous_version_id,receipt_id,baseline_receipt_id,baseline_sequence,quantity_micros,value_micros,recorded_at,sequence,production_effect_id,baseline_production_effect_id) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",params![id,material_id,material_version_id,before.source_id,receipt_id,baseline_receipt,boundary,q.micros(),v.micros(),time,seq,production_effect_id,baseline_production]).map_err(unavailable)?;
+    connection.execute("INSERT INTO holding_versions(id,material_id,material_version_id,previous_version_id,receipt_id,baseline_receipt_id,baseline_sequence,quantity_micros,value_micros,recorded_at,sequence,production_effect_id,baseline_production_effect_id,observation_version_id,baseline_observation_version_id,waste_id) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)",params![id,material_id,material_version_id,before.source_id,receipt_id,baseline_receipt,boundary,q.micros(),v.micros(),time,seq,production_effect_id,baseline_production,observation_version_id,baseline_observation,waste_id]).map_err(unavailable)?;
     connection.execute("INSERT INTO holding_heads(material_id,current_version_id,last_valid_version_id) VALUES(?1,?2,?3) ON CONFLICT(material_id) DO UPDATE SET current_version_id=excluded.current_version_id,last_valid_version_id=excluded.last_valid_version_id",params![material_id,id,last]).map_err(unavailable)?;
     Ok(id)
 }
@@ -318,15 +401,15 @@ impl Store {
         };
         let current = current_input(&self.connection, &id)?;
         let mut view = project_holding(&HoldingInput::default(), &[]).map_err(unavailable)?;
-        if let Some(first) = versions(&self.connection, Some(&id))?.first() {
-            let baseline = HoldingInput {
-                basis: Some(basis(first)?),
-                quantity: Some(Quantity::parse(&first.quantity).map_err(unavailable)?),
-                value: Some(Money::parse(&first.value).map_err(unavailable)?),
-                source_id: Some(first.id.clone()),
-                observation: None,
-                last_valid: None,
-            };
+        let history = versions(&self.connection, Some(&id))?;
+        let observations = stocktake::versions(&self.connection)?;
+        if let Some(first) = history
+            .iter()
+            .rev()
+            .find(|h| h.observation_version_id.is_some())
+            .or_else(|| history.first())
+        {
+            let baseline = input_from_history(&history, &observations, Some(first))?;
             let mut changes = super::receipt::records(&self.connection, Some(&id), None)?
                 .into_iter()
                 .filter(|r| r.seq.parse::<i64>().ok() > first.seq.parse::<i64>().ok())
@@ -351,6 +434,21 @@ impl Store {
                         output_value: e.output_value,
                         recorded_at: e.recorded_at,
                         seq: e.seq,
+                    }),
+            );
+            changes.extend(
+                super::waste::records(&self.connection, None, None)?
+                    .into_iter()
+                    .filter(|w| {
+                        w.effect.material_id == id
+                            && w.seq.parse::<i64>().ok() > first.seq.parse::<i64>().ok()
+                    })
+                    .map(|w| HoldingChange::Waste {
+                        event_id: w.id,
+                        quantity: w.effect.quantity,
+                        loss_value: w.effect.loss_value,
+                        recorded_at: w.recorded_at,
+                        seq: w.seq,
                     }),
             );
             changes.sort_by_key(|c| c.seq().parse::<i64>().unwrap_or(-1));
@@ -395,6 +493,8 @@ pub(super) fn validate_holding_schema(connection: &Connection) -> anyhow::Result
     validate_snapshot(
         &receipts,
         &production::effects(connection, None, None)?,
+        &stocktake::versions(connection)?,
+        &super::waste::records(connection, None, None)?,
         &versions,
         &heads,
     )?;
@@ -408,23 +508,79 @@ pub(super) fn validate_holding_schema(connection: &Connection) -> anyhow::Result
     Ok(())
 }
 
+pub(super) fn migrate_observations(connection: &Connection) -> anyhow::Result<()> {
+    connection.execute_batch("CREATE TABLE holding_versions_next(
+        id TEXT PRIMARY KEY NOT NULL,material_id TEXT NOT NULL,material_version_id TEXT NOT NULL,previous_version_id TEXT,
+        receipt_id TEXT UNIQUE REFERENCES receipts(id),baseline_receipt_id TEXT REFERENCES receipts(id),
+        baseline_sequence INTEGER NOT NULL REFERENCES snapshot_outbox(sequence),
+        quantity_micros INTEGER NOT NULL CHECK(quantity_micros>=0 AND quantity_micros<=9000000000000000),
+        value_micros INTEGER NOT NULL CHECK(value_micros>=0 AND value_micros<=9000000000000000000),
+        recorded_at TEXT NOT NULL,sequence INTEGER NOT NULL REFERENCES snapshot_outbox(sequence),
+        production_effect_id TEXT UNIQUE,baseline_production_effect_id TEXT,
+        observation_version_id TEXT UNIQUE REFERENCES stocktake_versions(id),baseline_observation_version_id TEXT REFERENCES stocktake_versions(id),waste_id TEXT UNIQUE REFERENCES wastes(id),
+        UNIQUE(material_id,id),
+        FOREIGN KEY(material_id,material_version_id) REFERENCES material_versions(material_id,id),
+        FOREIGN KEY(material_id,previous_version_id) REFERENCES holding_versions_next(material_id,id),
+        FOREIGN KEY(material_id,production_effect_id) REFERENCES production_effects(material_id,id),
+        FOREIGN KEY(material_id,baseline_production_effect_id) REFERENCES production_effects(material_id,id),
+        CHECK((receipt_id IS NOT NULL)+(production_effect_id IS NOT NULL)+(observation_version_id IS NOT NULL)+(waste_id IS NOT NULL)=1),
+        CHECK((baseline_receipt_id IS NOT NULL)+(baseline_production_effect_id IS NOT NULL)+(baseline_observation_version_id IS NOT NULL)=1),
+        CHECK(quantity_micros>0 OR value_micros=0));
+        INSERT INTO holding_versions_next SELECT *,NULL,NULL,NULL FROM holding_versions;
+        CREATE TABLE holding_heads_next(material_id TEXT PRIMARY KEY NOT NULL REFERENCES materials(id),current_version_id TEXT NOT NULL,last_valid_version_id TEXT,
+        FOREIGN KEY(material_id,current_version_id) REFERENCES holding_versions_next(material_id,id),
+        FOREIGN KEY(material_id,last_valid_version_id) REFERENCES holding_versions_next(material_id,id));
+        INSERT INTO holding_heads_next SELECT * FROM holding_heads;
+        CREATE TABLE sale_cost_rows_next(
+        sale_id TEXT NOT NULL REFERENCES sales(id),position INTEGER NOT NULL CHECK(position>=0 AND position<100),
+        recipe_line_id TEXT NOT NULL REFERENCES recipe_lines(id),source_kind TEXT NOT NULL CHECK(source_kind IN('holding_average','last_valid','preregistered','missing')),
+        holding_version_id TEXT REFERENCES holding_versions_next(id),material_price_id TEXT REFERENCES material_prices(id),
+        price_amount_micros INTEGER CHECK(price_amount_micros>=0 AND price_amount_micros<=9000000000000000000),
+        price_quantity_micros INTEGER CHECK(price_quantity_micros>0 AND price_quantity_micros<=9000000000000000),
+        missing_reason TEXT,cost_micros INTEGER CHECK(cost_micros>=0 AND cost_micros<=9000000000000000000),
+        PRIMARY KEY(sale_id,position),UNIQUE(sale_id,recipe_line_id),
+        CHECK((source_kind='missing' AND holding_version_id IS NULL AND material_price_id IS NULL AND price_amount_micros IS NULL AND price_quantity_micros IS NULL AND missing_reason IS NOT NULL)
+        OR (source_kind='preregistered' AND holding_version_id IS NULL AND material_price_id IS NOT NULL AND price_amount_micros IS NOT NULL AND price_quantity_micros IS NOT NULL AND missing_reason IS NULL)
+        OR (source_kind IN('holding_average','last_valid') AND holding_version_id IS NOT NULL AND material_price_id IS NULL AND price_amount_micros IS NOT NULL AND price_quantity_micros IS NOT NULL AND missing_reason IS NULL)));
+        INSERT INTO sale_cost_rows_next SELECT * FROM sale_cost_rows;
+        DROP TABLE sale_cost_rows;
+        DROP TABLE holding_heads;
+        DROP TABLE holding_versions;
+        ALTER TABLE holding_versions_next RENAME TO holding_versions;
+        ALTER TABLE holding_heads_next RENAME TO holding_heads;
+        ALTER TABLE sale_cost_rows_next RENAME TO sale_cost_rows;
+        CREATE INDEX holding_versions_material ON holding_versions(material_id,sequence);
+        PRAGMA user_version=10;")?;
+    Ok(())
+}
+
 pub(super) fn validate_snapshot(
     receipts: &[crate::receipt::ReceiptRecord],
     effects: &[production::EffectRow],
+    observations: &[stocktake::VersionRow],
+    wastes: &[crate::waste::WasteRecord],
     versions: &[HoldingVersion],
     heads: &[HoldingHead],
 ) -> Result<(), StoreError> {
     use std::collections::{BTreeMap, HashSet};
     let bad = || unavailable("보유 버전의 원천·이전·현재·마지막 기준이 다릅니다");
-    if versions.len() != receipts.len() + effects.len() {
+    if versions.len() != receipts.len() + effects.len() + observations.len() + wastes.len() {
         return Err(bad());
     }
     let mut grouped = BTreeMap::<&str, Vec<&HoldingVersion>>::new();
     let mut ids = HashSet::new();
     let mut used_receipts = HashSet::new();
     let mut used_effects = HashSet::new();
+    let mut used_observations = HashSet::new();
+    let mut used_wastes = HashSet::new();
     for version in versions {
-        Uuid::parse_str(&version.id).map_err(unavailable)?;
+        if Uuid::parse_str(&version.id)
+            .map_err(unavailable)?
+            .to_string()
+            != version.id
+        {
+            return Err(bad());
+        }
         if !ids.insert(&version.id) {
             return Err(bad());
         }
@@ -438,53 +594,112 @@ pub(super) fn validate_snapshot(
     }
     for (material, mut history) in grouped {
         history.sort_by_key(|v| v.seq.parse::<i64>().unwrap_or(-1));
-        let first = history[0];
+        let mut baseline = history[0];
         let mut previous = None;
         let mut last_valid = None;
         let mut prior_seq = 0;
         let (mut q, mut v) = (0i64, 0i64);
         for h in history {
             let seq = h.seq.parse::<i64>().map_err(unavailable)?;
-            let (source_material, source_version, source_seq, source_time, iq, iv, oq, ov) =
-                match (&h.receipt_id, &h.production_effect_id) {
-                    (Some(id), None) => {
-                        if !used_receipts.insert(id) {
-                            return Err(bad());
-                        }
-                        let r = receipts.iter().find(|r| &r.id == id).ok_or_else(bad)?;
-                        (
-                            &r.material_id,
-                            &r.material_version_id,
-                            &r.seq,
-                            &r.recorded_at,
-                            0,
-                            0,
-                            Quantity::parse(&r.quantity).map_err(unavailable)?.micros(),
-                            Money::parse(&r.amount).map_err(unavailable)?.micros(),
-                        )
+            let (source_material, source_version, source_seq, source_time, iq, iv, oq, ov) = match (
+                &h.receipt_id,
+                &h.production_effect_id,
+                &h.observation_version_id,
+                &h.waste_id,
+            ) {
+                (Some(id), None, None, None) => {
+                    if !used_receipts.insert(id) {
+                        return Err(bad());
                     }
-                    (None, Some(id)) => {
-                        if !used_effects.insert(id) {
-                            return Err(bad());
-                        }
-                        let e = effects.iter().find(|e| &e.id == id).ok_or_else(bad)?;
-                        (
-                            &e.material_id,
-                            &e.material_version_id,
-                            &e.seq,
-                            &e.recorded_at,
-                            Quantity::parse(&e.input_quantity)
-                                .map_err(unavailable)?
-                                .micros(),
-                            Money::parse(&e.input_value).map_err(unavailable)?.micros(),
-                            Quantity::parse(&e.output_quantity)
-                                .map_err(unavailable)?
-                                .micros(),
-                            Money::parse(&e.output_value).map_err(unavailable)?.micros(),
-                        )
+                    let r = receipts.iter().find(|r| &r.id == id).ok_or_else(bad)?;
+                    (
+                        &r.material_id,
+                        &r.material_version_id,
+                        &r.seq,
+                        &r.recorded_at,
+                        0,
+                        0,
+                        Quantity::parse(&r.quantity).map_err(unavailable)?.micros(),
+                        Money::parse(&r.amount).map_err(unavailable)?.micros(),
+                    )
+                }
+                (None, Some(id), None, None) => {
+                    if !used_effects.insert(id) {
+                        return Err(bad());
                     }
-                    _ => return Err(bad()),
-                };
+                    let e = effects.iter().find(|e| &e.id == id).ok_or_else(bad)?;
+                    (
+                        &e.material_id,
+                        &e.material_version_id,
+                        &e.seq,
+                        &e.recorded_at,
+                        Quantity::parse(&e.input_quantity)
+                            .map_err(unavailable)?
+                            .micros(),
+                        Money::parse(&e.input_value).map_err(unavailable)?.micros(),
+                        Quantity::parse(&e.output_quantity)
+                            .map_err(unavailable)?
+                            .micros(),
+                        Money::parse(&e.output_value).map_err(unavailable)?.micros(),
+                    )
+                }
+                (None, None, Some(id), None) => {
+                    if !used_observations.insert(id) {
+                        return Err(bad());
+                    }
+                    let o = observations.iter().find(|o| &o.id == id).ok_or_else(bad)?;
+                    if o.effect
+                        .before
+                        .as_ref()
+                        .and_then(|b| b.source_id.as_deref())
+                        != previous
+                        || o.effect.after.source_id.as_deref() != Some(&h.id)
+                    {
+                        return Err(bad());
+                    }
+                    baseline = h;
+                    (
+                        &o.effect.material_id,
+                        &o.effect.material_version_id,
+                        &o.seq,
+                        &o.recorded_at,
+                        q,
+                        v,
+                        Quantity::parse(&o.effect.after.quantity)
+                            .map_err(unavailable)?
+                            .micros(),
+                        Money::parse(o.effect.after.value.as_deref().ok_or_else(bad)?)
+                            .map_err(unavailable)?
+                            .micros(),
+                    )
+                }
+                (None, None, None, Some(id)) => {
+                    if !used_wastes.insert(id) {
+                        return Err(bad());
+                    }
+                    let w = wastes.iter().find(|w| &w.id == id).ok_or_else(bad)?;
+                    if w.effect.before.source_id.as_deref() != previous
+                        || w.effect.after.source_id.as_deref() != Some(&h.id)
+                    {
+                        return Err(bad());
+                    }
+                    (
+                        &w.effect.material_id,
+                        &w.effect.material_version_id,
+                        &w.seq,
+                        &w.recorded_at,
+                        Quantity::parse(&w.effect.quantity)
+                            .map_err(unavailable)?
+                            .micros(),
+                        Money::parse(&w.effect.loss_value)
+                            .map_err(unavailable)?
+                            .micros(),
+                        0,
+                        0,
+                    )
+                }
+                _ => return Err(bad()),
+            };
             if iq > q || iv > v {
                 return Err(bad());
             }
@@ -497,14 +712,17 @@ pub(super) fn validate_snapshot(
                 .and_then(|v| v.checked_add(ov))
                 .ok_or_else(bad)?;
             if seq <= prior_seq
+                || seq.to_string() != h.seq
+                || chrono::DateTime::parse_from_rfc3339(&h.recorded_at).is_err()
                 || h.previous_version_id.as_deref() != previous
                 || source_material != material
                 || source_version != &h.material_version_id
                 || source_seq != &h.seq
                 || source_time != &h.recorded_at
-                || h.baseline_receipt_id != first.receipt_id
-                || h.baseline_production_effect_id != first.production_effect_id
-                || h.baseline_seq != first.seq
+                || h.baseline_receipt_id != baseline.receipt_id
+                || h.baseline_production_effect_id != baseline.production_effect_id
+                || h.baseline_observation_version_id != baseline.observation_version_id
+                || h.baseline_seq != baseline.seq
                 || Quantity::from_micros(q).map_err(unavailable)?.decimal() != h.quantity
                 || Money::from_micros(v).map_err(unavailable)?.decimal() != h.value
                 || (q == 0 && v != 0)
@@ -523,12 +741,16 @@ pub(super) fn validate_snapshot(
             .find(|h| h.material_id == material)
             .ok_or_else(bad)?;
         if Some(head.current_version_id.as_str()) != previous
-            || Some(head.last_valid_version_id.as_str()) != last_valid
+            || head.last_valid_version_id.as_deref() != last_valid
         {
             return Err(bad());
         }
     }
-    if used_receipts.len() != receipts.len() || used_effects.len() != effects.len() {
+    if used_receipts.len() != receipts.len()
+        || used_effects.len() != effects.len()
+        || used_observations.len() != observations.len()
+        || used_wastes.len() != wastes.len()
+    {
         return Err(bad());
     }
     Ok(())

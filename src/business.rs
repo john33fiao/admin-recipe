@@ -10,6 +10,8 @@ use crate::{
     purchase_order::{OrderAction, OrderProposal, OrderVersion, normalize_order_draft},
     receipt::{DraftReceiptV1, OrderReceiptPreview, normalize_receipt_draft},
     sale::{DraftSaleV1, SaleProposal, SaleVersion, normalize_sale_draft},
+    stocktake::{DraftStocktakeV1, StocktakeRowEffect, normalize_stocktake_draft},
+    waste::{DraftWasteV1, WasteEffect, normalize_waste_draft},
 };
 use serde::{Deserialize, Deserializer, Serialize, de::Error};
 use uuid::Uuid;
@@ -22,6 +24,8 @@ pub enum BusinessKind {
     Receipt,
     Production,
     Sale,
+    Stocktake,
+    Waste,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -103,6 +107,16 @@ pub enum BusinessPayload {
         version: u32,
         data: DraftSaleV1,
     },
+    Stocktake {
+        #[serde(deserialize_with = "payload_version")]
+        version: u32,
+        data: DraftStocktakeV1,
+    },
+    Waste {
+        #[serde(deserialize_with = "payload_version")]
+        version: u32,
+        data: DraftWasteV1,
+    },
 }
 
 impl BusinessPayload {
@@ -113,6 +127,8 @@ impl BusinessPayload {
             Self::Receipt { .. } => BusinessKind::Receipt,
             Self::Production { .. } => BusinessKind::Production,
             Self::Sale { .. } => BusinessKind::Sale,
+            Self::Stocktake { .. } => BusinessKind::Stocktake,
+            Self::Waste { .. } => BusinessKind::Waste,
         }
     }
     pub fn version(&self) -> u32 {
@@ -121,7 +137,9 @@ impl BusinessPayload {
             | Self::PurchaseOrder { version, .. }
             | Self::Receipt { version, .. }
             | Self::Production { version, .. }
-            | Self::Sale { version, .. } => *version,
+            | Self::Sale { version, .. }
+            | Self::Stocktake { version, .. }
+            | Self::Waste { version, .. } => *version,
         }
     }
 }
@@ -151,6 +169,8 @@ pub fn normalize_business_payload(
         BusinessPayload::Receipt { data, .. } => normalize_receipt_draft(data)?,
         BusinessPayload::Production { data, .. } => normalize_production_draft(data)?,
         BusinessPayload::Sale { data, .. } => normalize_sale_draft(data)?,
+        BusinessPayload::Stocktake { data, .. } => normalize_stocktake_draft(data)?,
+        BusinessPayload::Waste { data, .. } => normalize_waste_draft(data)?,
     }
     Ok(payload)
 }
@@ -254,6 +274,12 @@ pub struct BusinessRevision {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum BusinessResult {
+    Stocktake {
+        stocktake_id: String,
+    },
+    Waste {
+        waste_id: String,
+    },
     Sale {
         sale_id: String,
         sale_version_id: String,
@@ -348,6 +374,13 @@ pub struct BusinessMutation {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum BusinessEffect {
+    Stocktake {
+        rows: Vec<StocktakeRowEffect>,
+        unchecked_positions: Vec<usize>,
+    },
+    Waste {
+        waste: Box<WasteEffect>,
+    },
     Sale {
         sale: SaleProposal,
         corrects_confirmation_id: Option<String>,

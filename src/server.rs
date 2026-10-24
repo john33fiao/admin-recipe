@@ -13,7 +13,9 @@ use crate::{
     receipt::ReceiptFilter,
     recipe::{CopyRecipe, CreateRecipe, RecipeFilter, ReviseRecipe},
     sale::SaleFilter,
+    stocktake::StocktakeFilter,
     store::{CreateMaterial, Store, StoreError},
+    waste::WasteFilter,
 };
 use axum::{
     Json, Router,
@@ -216,6 +218,18 @@ pub fn router(state: AppState) -> Router {
         .route("/api/productions/{id}", get(production_detail))
         .route("/api/sales", get(sale_list))
         .route("/api/sales/{id}", get(sale_detail))
+        .route(
+            "/api/stocktake-drafts",
+            post(stocktake_draft_create).layer(DefaultBodyLimit::max(256 * 1024)),
+        )
+        .route(
+            "/api/stocktake-drafts/{id}/revisions",
+            post(stocktake_draft_revise).layer(DefaultBodyLimit::max(256 * 1024)),
+        )
+        .route("/api/stocktakes", get(stocktake_list))
+        .route("/api/stocktakes/{id}", get(stocktake_detail))
+        .route("/api/wastes", get(waste_list))
+        .route("/api/wastes/{id}", get(waste_detail))
         .route("/api/orders", get(order_list))
         .route("/api/orders/{id}", get(order_detail))
         .route("/api/receipts", get(receipt_list))
@@ -605,6 +619,101 @@ async fn sale_list(
     Ok(Json(state.with_store(move |s| s.sale_list(filter)).await?))
 }
 
+async fn stocktake_draft_create(
+    State(state): State<AppState>,
+    input: Result<Json<CreateBusinessDraft>, JsonRejection>,
+) -> Result<impl IntoResponse, ApiError> {
+    let input = json_input(input)?;
+    if input.payload.kind() != BusinessKind::Stocktake {
+        return Err(ApiError(
+            StatusCode::BAD_REQUEST,
+            "이 경로에는 실사 초안만 저장할 수 있습니다.".into(),
+            "validation",
+        ));
+    }
+    Ok((
+        StatusCode::CREATED,
+        Json(state.with_store(move |s| s.business_create(input)).await?),
+    ))
+}
+
+async fn stocktake_draft_revise(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    input: Result<Json<ReviseBusinessDraft>, JsonRejection>,
+) -> Result<impl IntoResponse, ApiError> {
+    let input = json_input(input)?;
+    if input.payload.kind() != BusinessKind::Stocktake {
+        return Err(ApiError(
+            StatusCode::BAD_REQUEST,
+            "이 경로에는 실사 초안만 저장할 수 있습니다.".into(),
+            "validation",
+        ));
+    }
+    Ok((
+        StatusCode::CREATED,
+        Json(
+            state
+                .with_store(move |s| s.business_revise(&id, input))
+                .await?,
+        ),
+    ))
+}
+
+async fn stocktake_list(
+    State(state): State<AppState>,
+    input: Result<Query<StocktakeFilter>, QueryRejection>,
+) -> Result<impl IntoResponse, ApiError> {
+    let Query(filter) = input
+        .map_err(|error| ApiError(StatusCode::BAD_REQUEST, error.body_text(), "validation"))?;
+    Ok(Json(
+        state.with_store(move |s| s.stocktake_list(filter)).await?,
+    ))
+}
+
+async fn stocktake_detail(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<impl IntoResponse, ApiError> {
+    let detail = state
+        .with_store(move |s| s.stocktake_detail(&id))
+        .await?
+        .ok_or_else(|| {
+            ApiError(
+                StatusCode::NOT_FOUND,
+                "실사 내역을 찾을 수 없습니다.".into(),
+                "not_found",
+            )
+        })?;
+    Ok(Json(detail))
+}
+
+async fn waste_list(
+    State(state): State<AppState>,
+    input: Result<Query<WasteFilter>, QueryRejection>,
+) -> Result<impl IntoResponse, ApiError> {
+    let Query(filter) = input
+        .map_err(|error| ApiError(StatusCode::BAD_REQUEST, error.body_text(), "validation"))?;
+    Ok(Json(state.with_store(move |s| s.waste_list(filter)).await?))
+}
+
+async fn waste_detail(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<impl IntoResponse, ApiError> {
+    let detail = state
+        .with_store(move |s| s.waste_detail(&id))
+        .await?
+        .ok_or_else(|| {
+            ApiError(
+                StatusCode::NOT_FOUND,
+                "폐기 내역을 찾을 수 없습니다.".into(),
+                "not_found",
+            )
+        })?;
+    Ok(Json(detail))
+}
+
 async fn sale_detail(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -880,6 +989,8 @@ async fn static_asset(_headers: HeaderMap, request: Request<Body>) -> Response {
         || path == "/receipts"
         || path == "/productions"
         || path == "/sales"
+        || path == "/stocktakes"
+        || path == "/wastes"
         || path == "/recipes"
         || path == "/recipes/new"
         || path
@@ -899,6 +1010,12 @@ async fn static_asset(_headers: HeaderMap, request: Request<Body>) -> Response {
             .is_some_and(|id| uuid::Uuid::parse_str(id).is_ok())
         || path
             .strip_prefix("/sales/")
+            .is_some_and(|id| uuid::Uuid::parse_str(id).is_ok())
+        || path
+            .strip_prefix("/stocktakes/")
+            .is_some_and(|id| uuid::Uuid::parse_str(id).is_ok())
+        || path
+            .strip_prefix("/wastes/")
             .is_some_and(|id| uuid::Uuid::parse_str(id).is_ok())
         || path.strip_prefix("/recipes/").is_some_and(|part| {
             uuid::Uuid::parse_str(part).is_ok()

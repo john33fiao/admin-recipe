@@ -63,6 +63,81 @@ fn observed(quantity: &str, value: &str) -> HoldingInput {
     }
 }
 
+fn waste_change(event: u128, seq: &str, quantity: &str, loss: &str) -> HoldingChange {
+    HoldingChange::Waste {
+        event_id: id(event),
+        quantity: quantity.into(),
+        loss_value: loss.into(),
+        recorded_at: "2026-01-01T12:00:00.000Z".into(),
+        seq: seq.into(),
+    }
+}
+
+#[test]
+fn observation_projection_keeps_partial_waste_value_and_ends_full_loss_before_next_receipt() {
+    let basis = observed("10000", "9000");
+    let partial = project_holding(&basis, &[waste_change(20, "11", "1000", "0")]).unwrap();
+    let partial_amounts = partial.settlement_basis.unwrap();
+    assert_eq!(partial_amounts.quantity, "9000");
+    assert_eq!(partial_amounts.value.as_deref(), Some("9000"));
+    assert_eq!(partial.observation, basis.observation);
+    let closed = project_holding(
+        &basis,
+        &[
+            waste_change(20, "11", "1000", "0"),
+            waste_change(21, "12", "9000", "9000"),
+            change(22, "13", "2000", "3000"),
+        ],
+    )
+    .unwrap();
+    assert_eq!(closed.observation, basis.observation);
+    assert_eq!(closed.confirmed_changes.len(), 3);
+    let amounts = closed.settlement_basis.unwrap();
+    assert_eq!(amounts.quantity, "2000");
+    assert_eq!(amounts.value.as_deref(), Some("3000"));
+}
+
+#[test]
+fn waste_projection_rejects_average_value_subtraction_and_unconfirmed_or_duplicate_sources() {
+    let basis = observed("10000", "9000");
+    for event in [
+        waste_change(20, "11", "1000", "900"),
+        waste_change(20, "11", "10000", "0"),
+        waste_change(20, "11", "10001", "9000"),
+        waste_change(20, "11", "0", "0"),
+        waste_change(10, "10", "1", "0"),
+    ] {
+        assert!(project_holding(&basis, &[event]).is_err());
+    }
+    assert!(
+        project_holding(
+            &HoldingInput::default(),
+            &[waste_change(20, "11", "1", "0")]
+        )
+        .is_err()
+    );
+    assert!(
+        project_holding(
+            &basis,
+            &[
+                waste_change(20, "11", "1000", "0"),
+                waste_change(20, "12", "1000", "0"),
+            ]
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn zero_value_waste_still_records_the_confirmed_quantity_change() {
+    let basis = observed("5", "0");
+    let actual = project_holding(&basis, &[waste_change(20, "11", "5", "0")]).unwrap();
+    assert_eq!(actual.confirmed_changes.len(), 1);
+    let amounts = actual.settlement_basis.unwrap();
+    assert_eq!(amounts.quantity, "0");
+    assert_eq!(amounts.value.as_deref(), Some("0"));
+}
+
 #[test]
 fn first_receipt_establishes_a_basis_and_weighted_value_without_fabricating_an_observation() {
     let missing = HoldingInput::default();

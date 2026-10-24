@@ -61,6 +61,7 @@ pub(super) struct Validation<'a> {
     pub outputs: &'a [OutputRow],
     pub effects: &'a [EffectRow],
     pub holdings: &'a [holding::HoldingVersion],
+    pub observations: &'a [super::stocktake::VersionRow],
     pub business_records: &'a [business::Record],
     pub revisions: &'a [crate::business::BusinessRevision],
     pub confirmations: &'a [business::ConfirmationRow],
@@ -355,6 +356,8 @@ pub(super) fn apply_production(
                 material_version_id: &material.material_version_id,
                 receipt_id: None,
                 production_effect_id: Some(&effect_id),
+                observation_version_id: None,
+                waste_id: None,
                 before: &before,
                 after: &material.after,
                 seq,
@@ -470,7 +473,12 @@ impl Store {
                     before: before.as_ref().map(holding::amounts),
                     after: holding::amounts(&after),
                     basis_before: before.as_ref().map(holding::basis).transpose()?,
-                    observation: None,
+                    observation: holding::input_from_history(
+                        &holding::versions(&self.connection, None)?,
+                        &super::stocktake::versions(&self.connection)?,
+                        before.as_ref(),
+                    )?
+                    .observation,
                     input_quantity: effect.input_quantity,
                     input_value: effect.input_value,
                     output_quantity: effect.output_quantity,
@@ -577,7 +585,6 @@ pub(super) fn migrate_productions(connection: &Connection) -> anyhow::Result<()>
 
 pub(super) fn validate_snapshot(state: Validation<'_>) -> Result<(), StoreError> {
     use crate::business::{BusinessKind, BusinessPayload, BusinessStatus};
-    use crate::holding::HoldingInput;
     let bad = || unavailable("생산의 원행·확정·품목·보유·배분 근거가 일치하지 않습니다");
     let records = state
         .business_records
@@ -710,17 +717,7 @@ pub(super) fn validate_snapshot(state: Validation<'_>) -> Result<(), StoreError>
                 .as_ref()
                 .map(|id| state.holdings.iter().find(|h| &h.id == id).ok_or_else(bad))
                 .transpose()?;
-            let holding = match before {
-                Some(h) => HoldingInput {
-                    basis: Some(holding::basis(h)?),
-                    observation: None,
-                    quantity: Some(Quantity::parse(&h.quantity).map_err(unavailable)?),
-                    value: Some(Money::parse(&h.value).map_err(unavailable)?),
-                    source_id: Some(h.id.clone()),
-                    last_valid: None,
-                },
-                None => HoldingInput::default(),
-            };
+            let holding = holding::input_from_history(state.holdings, state.observations, before)?;
             contexts.push(ProductionMaterialContext {
                 material_id: effect.material_id.clone(),
                 material_version_id: effect.material_version_id.clone(),
@@ -845,6 +842,7 @@ pub(super) fn validate_production_schema(connection: &Connection) -> anyhow::Res
         outputs: &rows.outputs,
         effects: &rows.effects,
         holdings: &holdings,
+        observations: &super::stocktake::versions(connection)?,
         business_records: &business.records,
         revisions: &business.revisions,
         confirmations: &business.confirmations,

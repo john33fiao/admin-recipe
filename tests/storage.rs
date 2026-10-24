@@ -110,7 +110,7 @@ fn each_json_keeps_the_full_state_in_sequence_and_prior_bytes_never_change() {
     let old: Value = serde_json::from_slice(&first_bytes).unwrap();
     let new: Value = serde_json::from_slice(&fs::read(&files[1]).unwrap()).unwrap();
     assert_eq!(old["format_version"], 2);
-    assert_eq!(old["schema_version"], 9);
+    assert_eq!(old["schema_version"], 10);
     assert_eq!(old["sequence"], "1");
     assert_eq!(old["state"]["materials"].as_array().unwrap().len(), 1);
     assert_eq!(old["state"]["materials"][0]["id"], first.id);
@@ -246,7 +246,7 @@ fn synthetic_v1_is_backed_up_and_migrated_preserving_materials() {
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        9
+        10
     );
     let backups: Vec<_> = fs::read_dir(directory.path().join("backups"))
         .unwrap()

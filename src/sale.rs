@@ -257,6 +257,42 @@ pub struct SaleProposal {
 #[serde(rename_all = "snake_case")]
 pub enum SaleConsumptionStatus {
     Unconfirmed,
+    PartiallySettled,
+    Settled,
+    NotApplicable,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SaleMaterialConsumptionStatus {
+    Unconfirmed,
+    Allocated,
+    Unallocated,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SaleConsumptionReason {
+    NotObserved,
+    InitialBasisMissing,
+    ZeroWeight,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SaleMaterialConsumption {
+    pub material_id: String,
+    pub material_name: String,
+    pub unit: String,
+    pub status: SaleMaterialConsumptionStatus,
+    pub stocktake_id: Option<String>,
+    pub observation_id: Option<String>,
+    pub observation_version_id: Option<String>,
+    pub consumption_version_id: Option<String>,
+    pub sale_version_id: Option<String>,
+    pub quantity: Option<String>,
+    pub value: Option<String>,
+    pub reason: Option<SaleConsumptionReason>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -292,6 +328,7 @@ pub struct SaleDetail {
     pub head: SaleVersion,
     pub versions: Vec<SaleVersion>,
     pub consumption_status: SaleConsumptionStatus,
+    pub consumption: Vec<SaleMaterialConsumption>,
     pub state: CatalogState,
 }
 

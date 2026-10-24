@@ -294,11 +294,14 @@ fn detail(connection: &Connection, id: &str) -> Result<Option<SaleDetail>, Store
             .map(|r| r.row)
             .collect(),
     );
+    let consumption = consumption(connection, &item)?;
+    let consumption_status = consumption_status(&consumption);
     Ok(Some(SaleDetail {
         item,
         head,
         versions,
-        consumption_status: SaleConsumptionStatus::Unconfirmed,
+        consumption_status,
+        consumption,
         state: catalog::state(connection)?,
     }))
 }
@@ -436,6 +439,15 @@ pub(super) fn inspect_sale(
     };
     let previous = corrects.map(|id| target(connection, id)).transpose()?;
     let basis = if let Some(old) = &previous {
+        let settled: bool=connection.query_row("SELECT EXISTS(SELECT 1 FROM consumption_rows r JOIN consumption_heads h ON h.current_version_id=r.consumption_version_id WHERE r.sale_id=?1)",[&old.item.id],|r|r.get(0)).map_err(unavailable)?;
+        if settled {
+            issue(
+                &mut issues,
+                "count",
+                "requires_allocation_correction",
+                "이미 실사 정산에 연결된 판매입니다. 배분을 함께 정정하는 기능에서 수정하세요",
+            );
+        }
         if Some(old.head.confirmation_id.as_str()) != corrects {
             issue(
                 &mut issues,
@@ -662,7 +674,7 @@ impl Store {
                 original_seq: row.seq,
                 recorded_at: row.recorded_at,
                 updated_at: sale.head.recorded_at,
-                consumption_status: SaleConsumptionStatus::Unconfirmed,
+                consumption_status: sale.consumption_status,
             });
         }
         let (known_revenue, missing_revenue_count) =
@@ -689,36 +701,7 @@ impl Store {
         if as_of_revision < 0 || as_of_revision > current {
             return Err(validation("배분 기준 순번을 확인하세요"));
         }
-        let all_versions = versions(&self.connection, None)?;
-        let all_rows = cost_rows(&self.connection, None)?;
-        let mut sources = vec![];
-        for record in records(&self.connection, None)? {
-            let Some(version) = all_versions
-                .iter()
-                .filter(|v| {
-                    v.sale_id == record.id
-                        && v.seq.parse::<i64>().is_ok_and(|s| s <= as_of_revision)
-                })
-                .max_by_key(|v| v.seq.parse::<i64>().unwrap_or(0))
-            else {
-                continue;
-            };
-            let mut direct_material_ids = all_rows
-                .iter()
-                .filter(|r| r.sale_id == record.id)
-                .map(|r| r.row.material_id.clone())
-                .collect::<Vec<_>>();
-            direct_material_ids.sort();
-            direct_material_ids.dedup();
-            sources.push(SaleConsumptionSource {
-                sale_id: record.id,
-                sale_version_id: version.id.clone(),
-                recipe_version_id: record.recipe_version_id,
-                original_seq: record.seq.parse().map_err(unavailable)?,
-                count: SaleCount::parse(&version.count).map_err(unavailable)?,
-                direct_material_ids,
-            });
-        }
+        let sources = sources_at(&self.connection, as_of_revision)?;
         eligible_sales(
             &SaleInterval {
                 material_id,
@@ -729,6 +712,146 @@ impl Store {
         )
         .map_err(validation)
     }
+}
+
+pub(super) fn consumption_sources(
+    records: &[RecordRow],
+    cost_rows: &[CostRow],
+    versions: &[SaleVersion],
+    as_of: i64,
+) -> Result<Vec<SaleConsumptionSource>, StoreError> {
+    let mut sources = vec![];
+    for record in records {
+        let Some(version) = versions
+            .iter()
+            .filter(|v| v.sale_id == record.id && v.seq.parse::<i64>().is_ok_and(|s| s <= as_of))
+            .max_by_key(|v| v.seq.parse::<i64>().unwrap_or(0))
+        else {
+            continue;
+        };
+        let mut direct = cost_rows
+            .iter()
+            .filter(|r| r.sale_id == record.id)
+            .map(|r| r.row.material_id.clone())
+            .collect::<Vec<_>>();
+        direct.sort();
+        direct.dedup();
+        sources.push(SaleConsumptionSource {
+            sale_id: record.id.clone(),
+            sale_version_id: version.id.clone(),
+            recipe_version_id: record.recipe_version_id.clone(),
+            original_seq: record.seq.parse().map_err(unavailable)?,
+            count: SaleCount::parse(&version.count).map_err(unavailable)?,
+            direct_material_ids: direct,
+        });
+    }
+    Ok(sources)
+}
+pub(super) fn sources_at(
+    connection: &Connection,
+    as_of: i64,
+) -> Result<Vec<SaleConsumptionSource>, StoreError> {
+    consumption_sources(
+        &records(connection, None)?,
+        &cost_rows(connection, None)?,
+        &versions(connection, None)?,
+        as_of,
+    )
+}
+fn consumption_status(rows: &[SaleMaterialConsumption]) -> SaleConsumptionStatus {
+    if rows.is_empty() {
+        return SaleConsumptionStatus::NotApplicable;
+    }
+    let settled = rows
+        .iter()
+        .filter(|r| r.status != SaleMaterialConsumptionStatus::Unconfirmed)
+        .count();
+    if settled == 0 {
+        SaleConsumptionStatus::Unconfirmed
+    } else if settled == rows.len() {
+        SaleConsumptionStatus::Settled
+    } else {
+        SaleConsumptionStatus::PartiallySettled
+    }
+}
+fn consumption(
+    connection: &Connection,
+    item: &SaleOriginal,
+) -> Result<Vec<SaleMaterialConsumption>, StoreError> {
+    let state = super::stocktake::snapshot_rows(connection)?;
+    let mut result = vec![];
+    let mut seen = HashSet::new();
+    for direct in &item.recipe_cost.rows {
+        if !seen.insert(&direct.material_id) {
+            continue;
+        }
+        let linked = state
+            .consumption_rows
+            .iter()
+            .filter(|r| r.row.sale_id == item.id)
+            .find_map(|row| {
+                let c = state
+                    .consumption_versions
+                    .iter()
+                    .find(|c| c.id == row.consumption_version_id)?;
+                let v = state.versions.iter().find(|v| {
+                    v.id == c.observation_version_id && v.effect.material_id == direct.material_id
+                })?;
+                let o = state
+                    .observations
+                    .iter()
+                    .find(|o| o.id == v.observation_id)?;
+                state
+                    .consumption_heads
+                    .iter()
+                    .find(|h| h.observation_id == o.id && h.current_version_id == c.id)?;
+                Some((row, c, v, o))
+            });
+        let mut view = SaleMaterialConsumption {
+            material_id: direct.material_id.clone(),
+            material_name: direct.material_name.clone(),
+            unit: direct.unit.clone(),
+            status: SaleMaterialConsumptionStatus::Unconfirmed,
+            stocktake_id: None,
+            observation_id: None,
+            observation_version_id: None,
+            consumption_version_id: None,
+            sale_version_id: None,
+            quantity: None,
+            value: None,
+            reason: Some(SaleConsumptionReason::NotObserved),
+        };
+        if let Some((row, c, v, o)) = linked {
+            view.status = if row.row.quantity.is_some() {
+                SaleMaterialConsumptionStatus::Allocated
+            } else {
+                SaleMaterialConsumptionStatus::Unallocated
+            };
+            view.stocktake_id = Some(o.stocktake_id.clone());
+            view.observation_id = Some(o.id.clone());
+            view.observation_version_id = Some(v.id.clone());
+            view.consumption_version_id = Some(c.id.clone());
+            view.sale_version_id = Some(row.row.sale_version_id.clone());
+            view.quantity = row.row.quantity.clone();
+            view.value = row.row.value.clone();
+            view.reason = if row.row.quantity.is_none() {
+                Some(SaleConsumptionReason::ZeroWeight)
+            } else {
+                None
+            };
+        } else if state.versions.iter().any(|v| {
+            v.effect.material_id == direct.material_id
+                && matches!(
+                    v.effect.calculation,
+                    crate::stocktake::StocktakeCalculation::Initial { .. }
+                )
+                && v.seq.parse::<i64>().ok() > item.seq.parse::<i64>().ok()
+        }) {
+            view.reason = Some(SaleConsumptionReason::InitialBasisMissing);
+        }
+        result.push(view);
+    }
+    Ok(result)
 }
 
 pub(super) fn snapshot_rows(connection: &Connection) -> Result<SnapshotRows, StoreError> {

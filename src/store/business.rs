@@ -1,5 +1,6 @@
 use super::{
-    Store, StoreError, catalog, production, purchase_order, receipt, sale, snapshot, unavailable,
+    Store, StoreError, catalog, production, purchase_order, receipt, sale, snapshot, stocktake,
+    unavailable, waste,
 };
 use crate::{
     business::*,
@@ -22,6 +23,8 @@ fn parse_kind(kind: &str) -> Result<BusinessKind, StoreError> {
         "receipt" => Ok(BusinessKind::Receipt),
         "production" => Ok(BusinessKind::Production),
         "sale" => Ok(BusinessKind::Sale),
+        "stocktake" => Ok(BusinessKind::Stocktake),
+        "waste" => Ok(BusinessKind::Waste),
         _ => Err(unavailable("지원하지 않는 업무 종류입니다")),
     }
 }
@@ -32,6 +35,8 @@ fn kind_text(kind: BusinessKind) -> &'static str {
         BusinessKind::Receipt => "receipt",
         BusinessKind::Production => "production",
         BusinessKind::Sale => "sale",
+        BusinessKind::Stocktake => "stocktake",
+        BusinessKind::Waste => "waste",
     }
 }
 fn result_material_id(result: &BusinessResult) -> Option<&str> {
@@ -39,7 +44,10 @@ fn result_material_id(result: &BusinessResult) -> Option<&str> {
         BusinessResult::CatalogPrice { material_id, .. }
         | BusinessResult::PurchaseOrder { material_id, .. }
         | BusinessResult::Receipt { material_id, .. } => Some(material_id),
-        BusinessResult::Production { .. } | BusinessResult::Sale { .. } => None,
+        BusinessResult::Production { .. }
+        | BusinessResult::Sale { .. }
+        | BusinessResult::Stocktake { .. }
+        | BusinessResult::Waste { .. } => None,
     }
 }
 fn same_correction_target(left: &BusinessResult, right: &BusinessResult) -> bool {
@@ -228,6 +236,8 @@ fn confirmation(
         BusinessKind::Receipt => receipt::result(connection,id)?,
         BusinessKind::Production => production::result(connection,id)?,
         BusinessKind::Sale => sale::result(connection,id)?,
+        BusinessKind::Stocktake=>stocktake::result(connection,id)?,
+        BusinessKind::Waste=>waste::result(connection,id)?,
     };
     Ok(Some(BusinessConfirmation {
         id: row.id,
@@ -329,6 +339,8 @@ fn inspect(
         BusinessPayload::Sale { data, .. } => {
             sale::inspect_sale(connection, data, record.corrects_confirmation_id.as_deref())
         }
+        BusinessPayload::Stocktake { data, .. } => stocktake::inspect_stocktake(connection, data),
+        BusinessPayload::Waste { data, .. } => waste::inspect_waste(connection, data),
     }
 }
 fn inspect_price(
@@ -522,6 +534,8 @@ fn detail(
         BusinessPayload::Receipt { data, .. } => receipt::material_name(connection, data)?,
         BusinessPayload::Production { data, .. } => production::material_name(connection, data)?,
         BusinessPayload::Sale { data, .. } => sale::material_name(connection, data)?,
+        BusinessPayload::Stocktake { data, .. } => stocktake::material_name(connection, data)?,
+        BusinessPayload::Waste { data, .. } => waste::material_name(connection, data)?,
     };
     let item = BusinessSummary {
         id: record.id,
@@ -799,6 +813,8 @@ impl Store {
                     BusinessPayload::Receipt {data,..} => receipt::apply_receipt(tx,data,&event,seq,time,today)?,
                     BusinessPayload::Production {data,..} => production::apply_production(tx,data,&event,seq,time)?,
                     BusinessPayload::Sale {data,..} => sale::apply_sale(tx,data,record.corrects_confirmation_id.as_deref(),&event)?,
+                    BusinessPayload::Stocktake{data,..}=>stocktake::apply_stocktake(tx,data,&event,seq,time)?,
+                    BusinessPayload::Waste{data,..}=>waste::apply_waste(tx,data,&event,seq,time)?,
                 }
                 if let Some(target) = record.corrects_confirmation_id {
                     tx.execute(

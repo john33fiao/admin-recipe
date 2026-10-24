@@ -221,7 +221,10 @@ fn schema_eight_open_adds_sale_relations_without_rewriting_retained_data() {
     let new_schema: i64 = database
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(new_schema, 9, "opening schema8 must install sale storage");
+    assert_eq!(
+        new_schema, 10,
+        "opening schema8 must install current storage"
+    );
     for table in ["sales", "sale_cost_rows", "sale_versions", "sale_heads"] {
         let count: i64 = database
             .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {

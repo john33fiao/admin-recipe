@@ -14,9 +14,22 @@ pub(super) struct Snapshot {
 }
 
 impl Snapshot {
-    pub(super) fn into_state(self) -> Result<SnapshotStateV9, StoreError> {
+    pub(super) fn into_state(self) -> Result<SnapshotStateV10, StoreError> {
         let mut value = serde_json::to_value(self.state).map_err(unavailable)?;
-        for name in ["sales", "sale_versions", "sale_heads", "sale_cost_rows"] {
+        for name in [
+            "sales",
+            "sale_versions",
+            "sale_heads",
+            "sale_cost_rows",
+            "stocktake_batches",
+            "stocktake_observations",
+            "stocktake_versions",
+            "stocktake_heads",
+            "consumption_versions",
+            "consumption_heads",
+            "consumption_rows",
+            "wastes",
+        ] {
             value[name] = serde_json::json!([]);
         }
         serde_json::from_value(value).map_err(unavailable)

@@ -8,6 +8,8 @@ export interface SaleVersion { id: string; sale_id: string; previous_version_id:
 export interface SaleProposal { material_id: string; material_version_id: string; material_name: string; recipe_version_id: string; count: string; amount: string | null; recipe_cost: SaleRecipeCost }
 export interface SaleBusinessEffect { kind: 'sale'; sale: SaleProposal; corrects_confirmation_id: string | null; previous: SaleVersion | null }
 export interface SaleBusinessResult { kind: 'sale'; sale_id: string; sale_version_id: string }
-export interface SaleSummary { id: string; material_id: string; material_name: string; recipe_version_id: string; current_version_id: string; count: string; selling_price: string | null; amount: string | null; original_seq: string; recorded_at: string; updated_at: string; consumption_status: 'unconfirmed' }
+export interface SaleSummary { id: string; material_id: string; material_name: string; recipe_version_id: string; current_version_id: string; count: string; selling_price: string | null; amount: string | null; original_seq: string; recorded_at: string; updated_at: string; consumption_status: SaleConsumptionStatus }
 export interface SaleList { items: SaleSummary[]; known_revenue: string; missing_revenue_count: number; state: CatalogState }
-export interface SaleDetail { item: SaleOriginal; head: SaleVersion; versions: SaleVersion[]; consumption_status: 'unconfirmed'; state: CatalogState }
+export type SaleConsumptionStatus = 'unconfirmed' | 'partially_settled' | 'settled' | 'not_applicable'
+export interface SaleMaterialConsumption { material_id: string; material_name: string; unit: string; status: 'unconfirmed' | 'allocated' | 'unallocated'; stocktake_id: string | null; observation_id: string | null; observation_version_id: string | null; consumption_version_id: string | null; sale_version_id: string | null; quantity: string | null; value: string | null; reason: 'not_observed' | 'initial_basis_missing' | 'zero_weight' | null }
+export interface SaleDetail { item: SaleOriginal; head: SaleVersion; versions: SaleVersion[]; consumption: SaleMaterialConsumption[]; consumption_status: SaleConsumptionStatus; state: CatalogState }

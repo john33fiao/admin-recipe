@@ -9,4 +9,6 @@ pub mod receipt;
 pub mod recipe;
 pub mod sale;
 pub mod server;
+pub mod stocktake;
 pub mod store;
+pub mod waste;

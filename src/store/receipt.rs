@@ -813,7 +813,7 @@ fn validate_legacy_holdings(
             .find(|h| h.material_id == material)
             .ok_or_else(bad)?;
         if Some(head.current_version_id.as_str()) != previous
-            || head.last_valid_version_id != head.current_version_id
+            || head.last_valid_version_id.as_deref() != Some(head.current_version_id.as_str())
         {
             return Err(bad());
         }

@@ -1,3 +1,4 @@
+import { copyValuation, validStocktakeShape, validWasteShape, validateStocktakeDraft } from './stocktake.ts'
 import type { BusinessPayload, BusinessPending, BusinessPreview, CatalogPricePayload } from '../types/business.ts'
 import type { CatalogState } from '../types/material.ts'
 import { validProductionShape, validateProductionDraft } from './production.ts'
@@ -11,6 +12,7 @@ const object = (value: unknown): value is Record<string, unknown> => !!value && 
 const exact = (value: Record<string, unknown>, keys: string[]) => Object.keys(value).length === keys.length && keys.every(key => Object.hasOwn(value, key))
 
 export function validateBusinessDraft(payload: BusinessPayload): Record<string, string> {
+  if (payload.kind === 'stocktake' || payload.kind === 'waste') return validateStocktakeDraft(payload)
   if (payload.kind === 'receipt') return validateReceiptDraft(payload)
   if (payload.kind === 'production') return validateProductionDraft(payload)
   if (payload.kind === 'sale') return validateSaleDraft(payload)
@@ -27,7 +29,7 @@ export function validateBusinessDraft(payload: BusinessPayload): Record<string, 
 }
 
 export function copyPayload<T extends BusinessPayload>(payload: T): T {
-  const data = payload.kind === 'receipt' ? { ...payload.data, source: { ...payload.data.source }, stock_effect: { ...payload.data.stock_effect } } : payload.kind === 'production' ? { ...payload.data, inputs: payload.data.inputs.map(row => ({ ...row })), outputs: payload.data.outputs.map(row => ({ ...row })) } : { ...payload.data }
+  const data = payload.kind === 'stocktake' ? { ...payload.data, rows: payload.data.rows.map(row => ({ ...row, initial_value: copyValuation(row.initial_value), excess: row.excess == null ? row.excess : { ...row.excess, value: copyValuation(row.excess.value) } })) } : payload.kind === 'receipt' ? { ...payload.data, source: { ...payload.data.source }, stock_effect: { ...payload.data.stock_effect } } : payload.kind === 'production' ? { ...payload.data, inputs: payload.data.inputs.map(row => ({ ...row })), outputs: payload.data.outputs.map(row => ({ ...row })) } : { ...payload.data }
   return { kind: payload.kind, version: payload.version, data } as T
 }
 function sameValue(a: unknown, b: unknown): boolean {
@@ -43,8 +45,10 @@ export function sameBusinessTarget(a: BusinessPayload, b: BusinessPayload) {
   if (a.kind !== 'purchase_order' || b.kind !== 'purchase_order') return true
   return a.data.action === b.data.action && (a.data.action === 'place' || (b.data.action !== 'place' && a.data.order_id === b.data.order_id))
 }
-export function businessLabel(payload: BusinessPayload) { return payload.kind === 'catalog_price' ? '사전 가격' : payload.kind === 'receipt' ? '실제 입고' : payload.kind === 'production' ? '실제 생산' : payload.kind === 'sale' ? '판매' : { place: '주문 작성', revise: '주문 수정', cancel: '주문 취소' }[payload.data.action] }
+export function businessLabel(payload: BusinessPayload) { return payload.kind === 'stocktake' ? '실사' : payload.kind === 'waste' ? '폐기 · 직원식' : payload.kind === 'catalog_price' ? '사전 가격' : payload.kind === 'receipt' ? '실제 입고' : payload.kind === 'production' ? '실제 생산' : payload.kind === 'sale' ? '판매' : { place: '주문 작성', revise: '주문 수정', cancel: '주문 취소' }[payload.data.action] }
 export function businessInputText(payload: BusinessPayload) {
+  if (payload.kind === 'stocktake') return `실사 ${payload.data.rows.length}행 · 수량 입력 ${payload.data.rows.filter(row => row.quantity.trim() !== '').length}행`
+  if (payload.kind === 'waste') return `${payload.data.reason === 'discard' ? '명시 폐기' : '직원식'} ${payload.data.quantity || '수량 미입력'} ${payload.data.unit}`
   if (payload.kind === 'catalog_price') return `${payload.data.quantity || '수량 미입력'} ${payload.data.unit || '단위 미입력'} / ${payload.data.amount === '' ? '금액 미입력' : `${payload.data.amount}원`}`
   if (payload.kind === 'receipt') return `${payload.data.quantity || '수량 미입력'} ${payload.data.unit || '단위 미입력'} / 실제 금액 ${payload.data.amount.trim() === '' ? '미입력' : `${payload.data.amount}원`} / ${payload.data.receipt_date || '입고일 미입력'}`
   if (payload.kind === 'sale') return payload.data.count.trim() === '' ? '판매 개수 미입력' : `판매 ${payload.data.count}개`
@@ -80,6 +84,8 @@ export function validBusinessPayload(value: unknown): value is BusinessPayload {
   } else if (value.kind === 'receipt') { if (!validReceiptShape(value.data)) return false }
   else if (value.kind === 'production') { if (!validProductionShape(value.data)) return false }
   else if (value.kind === 'sale') { if (!validSaleShape(value.data)) return false }
+  else if (value.kind === 'stocktake') { if (!validStocktakeShape(value.data)) return false }
+  else if (value.kind === 'waste') { if (!validWasteShape(value.data)) return false }
   else return false
   return Object.keys(validateBusinessDraft(value as unknown as BusinessPayload)).length === 0
 }

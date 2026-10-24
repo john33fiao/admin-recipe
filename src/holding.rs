@@ -44,6 +44,7 @@ pub struct HoldingObservation {
 pub enum HoldingChangeKind {
     Receipt,
     Production,
+    Waste,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -66,6 +67,13 @@ pub enum HoldingChange {
         recorded_at: String,
         seq: String,
     },
+    Waste {
+        event_id: String,
+        quantity: String,
+        loss_value: String,
+        recorded_at: String,
+        seq: String,
+    },
 }
 
 impl HoldingChange {
@@ -73,21 +81,28 @@ impl HoldingChange {
         match self {
             Self::Receipt { .. } => HoldingChangeKind::Receipt,
             Self::Production { .. } => HoldingChangeKind::Production,
+            Self::Waste { .. } => HoldingChangeKind::Waste,
         }
     }
     pub fn event_id(&self) -> &str {
         match self {
-            Self::Receipt { event_id, .. } | Self::Production { event_id, .. } => event_id,
+            Self::Receipt { event_id, .. }
+            | Self::Production { event_id, .. }
+            | Self::Waste { event_id, .. } => event_id,
         }
     }
     pub fn recorded_at(&self) -> &str {
         match self {
-            Self::Receipt { recorded_at, .. } | Self::Production { recorded_at, .. } => recorded_at,
+            Self::Receipt { recorded_at, .. }
+            | Self::Production { recorded_at, .. }
+            | Self::Waste { recorded_at, .. } => recorded_at,
         }
     }
     pub fn seq(&self) -> &str {
         match self {
-            Self::Receipt { seq, .. } | Self::Production { seq, .. } => seq,
+            Self::Receipt { seq, .. } | Self::Production { seq, .. } | Self::Waste { seq, .. } => {
+                seq
+            }
         }
     }
 }
@@ -316,6 +331,17 @@ fn change_amounts(
     let zero_q = Quantity::from_micros(0)?;
     let zero_v = Money::from_micros(0)?;
     match change {
+        HoldingChange::Waste {
+            quantity,
+            loss_value,
+            ..
+        } => {
+            let q = Quantity::parse(quantity)?;
+            if q.micros() == 0 {
+                return Err(invalid("명시 폐기 수량은 0보다 커야 합니다"));
+            }
+            Ok((q, Money::parse(loss_value)?, zero_q, zero_v))
+        }
         HoldingChange::Receipt {
             quantity, value, ..
         } => {
@@ -386,7 +412,7 @@ fn apply_change(
 }
 
 /// Reconstruct a view from the exact baseline Q/V and subsequent confirmed
-/// receipts and production effects. This is not an accumulated current head.
+/// receipts, production effects and explicit waste. This is not a current head.
 /// The event establishing the baseline is checked, then excluded from changes.
 pub fn project_holding(
     baseline: &HoldingInput,
@@ -437,6 +463,9 @@ pub fn project_holding(
             let kind = match change.kind() {
                 HoldingChangeKind::Receipt => HoldingBasisKind::Receipt,
                 HoldingChangeKind::Production => HoldingBasisKind::Production,
+                HoldingChangeKind::Waste => {
+                    return Err(invalid("폐기는 시작 기준을 만들 수 없습니다"));
+                }
             };
             if basis
                 .as_ref()
@@ -455,8 +484,25 @@ pub fn project_holding(
             (Some(q), Some(v)) => (q, v),
             _ => return Err(invalid("기존 보유 수량의 가치를 먼저 확인해 주세요")),
         };
-        let (next_q, next_v) =
-            apply_change(current_q, current_v, input_q, input_v, output_q, output_v)?;
+        let (next_q, next_v) = if change.kind() == HoldingChangeKind::Waste {
+            if input_q.micros() > current_q.micros() {
+                return Err(invalid("폐기 수량이 확인한 정산 기준을 넘습니다"));
+            }
+            let expected_loss = if input_q == current_q {
+                current_v.micros()
+            } else {
+                0
+            };
+            if input_v.micros() != expected_loss {
+                return Err(invalid("부분 폐기 가치와 전량 폐기 손실의 근거가 다릅니다"));
+            }
+            (
+                Quantity::from_micros(current_q.micros() - input_q.micros())?,
+                Money::from_micros(current_v.micros() - expected_loss)?,
+            )
+        } else {
+            apply_change(current_q, current_v, input_q, input_v, output_q, output_v)?
+        };
         quantity = Some(next_q);
         value = Some(next_v);
         applied = true;
@@ -465,6 +511,9 @@ pub fn project_holding(
                 kind: match change.kind() {
                     HoldingChangeKind::Receipt => HoldingBasisKind::Receipt,
                     HoldingChangeKind::Production => HoldingBasisKind::Production,
+                    HoldingChangeKind::Waste => {
+                        return Err(invalid("폐기는 시작 기준을 만들 수 없습니다"));
+                    }
                 },
                 id: Some(change.event_id().into()),
                 seq: Some(change.seq().into()),
