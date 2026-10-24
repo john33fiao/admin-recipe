@@ -1,4 +1,8 @@
 use crate::{
+    catalog::{
+        ArchiveCatalogMaterial, CatalogFilter, CreateCatalogMaterial, CreateCatalogPrice,
+        ReviseCatalogMaterial,
+    },
     lifecycle::{Lifecycle, Policy},
     store::{CreateMaterial, Store, StoreError},
 };
@@ -6,7 +10,8 @@ use axum::{
     Json, Router,
     body::Body,
     extract::{
-        DefaultBodyLimit, Path, State, WebSocketUpgrade,
+        DefaultBodyLimit, Path, Query, State, WebSocketUpgrade,
+        rejection::{JsonRejection, QueryRejection},
         ws::{Message, WebSocket},
     },
     http::{HeaderMap, HeaderValue, Method, Request, StatusCode},
@@ -16,7 +21,7 @@ use axum::{
 };
 use futures_util::SinkExt;
 use serde::Deserialize;
-use serde_json::json;
+use serde_json::{Value, json};
 use std::{
     sync::{
         Arc, Mutex,
@@ -103,6 +108,7 @@ impl AppState {
                 ApiError(
                     StatusCode::SERVICE_UNAVAILABLE,
                     "저장소를 다시 열어 주세요.".into(),
+                    "unavailable",
                 )
             })?;
             // This check under the writer mutex rejects queued work on shutdown.
@@ -111,6 +117,7 @@ impl AppState {
                 return Err(ApiError(
                     StatusCode::SERVICE_UNAVAILABLE,
                     "앱을 종료하는 중입니다.".into(),
+                    "unavailable",
                 ));
             }
             f(&mut store).map_err(ApiError::from)
@@ -120,30 +127,52 @@ impl AppState {
             ApiError(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "저장 작업을 마치지 못했습니다.".into(),
+                "internal",
             )
         })?
     }
 }
 
 #[derive(Debug)]
-pub struct ApiError(StatusCode, String);
+pub struct ApiError(StatusCode, String, &'static str);
 impl From<StoreError> for ApiError {
     fn from(e: StoreError) -> Self {
-        let status = match &e {
-            StoreError::Validation(_) => StatusCode::BAD_REQUEST,
-            StoreError::Conflict(_) => StatusCode::CONFLICT,
-            StoreError::Unavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
+        let (status, code) = match &e {
+            StoreError::Validation(_) => (StatusCode::BAD_REQUEST, "validation"),
+            StoreError::Conflict(_) => (StatusCode::CONFLICT, "request_conflict"),
+            StoreError::StaleState(_) => (StatusCode::CONFLICT, "stale_state"),
+            StoreError::Unavailable(_) => (StatusCode::SERVICE_UNAVAILABLE, "unavailable"),
         };
-        Self(status, e.to_string())
+        Self(status, e.to_string(), code)
     }
 }
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        (self.0, Json(json!({"error": self.1}))).into_response()
+        (self.0, Json(json!({"error": self.1, "code": self.2}))).into_response()
     }
 }
 fn error(status: StatusCode, message: &str) -> Response {
-    ApiError(status, message.into()).into_response()
+    let code = match status {
+        StatusCode::BAD_REQUEST => "validation",
+        StatusCode::UNAUTHORIZED => "unauthorized",
+        StatusCode::FORBIDDEN => "forbidden",
+        StatusCode::NOT_FOUND => "not_found",
+        StatusCode::METHOD_NOT_ALLOWED => "method_not_allowed",
+        StatusCode::SERVICE_UNAVAILABLE => "unavailable",
+        _ => "internal",
+    };
+    ApiError(status, message.into(), code).into_response()
+}
+
+fn catalog_input<T>(input: Result<Json<T>, JsonRejection>) -> Result<T, ApiError> {
+    input.map(|Json(value)| value).map_err(|error| {
+        let status = if error.status() == StatusCode::PAYLOAD_TOO_LARGE {
+            StatusCode::PAYLOAD_TOO_LARGE
+        } else {
+            StatusCode::BAD_REQUEST
+        };
+        ApiError(status, error.body_text(), "validation")
+    })
 }
 
 pub fn router(state: AppState) -> Router {
@@ -153,8 +182,12 @@ pub fn router(state: AppState) -> Router {
             get(|| async { Json(json!({"status":"ok"})) }),
         )
         .route("/api/session", post(session))
+        .route("/api/state", get(catalog_state))
         .route("/api/materials", get(list).post(create))
         .route("/api/materials/{id}", get(detail))
+        .route("/api/materials/{id}/versions", post(revise))
+        .route("/api/materials/{id}/archive", post(archive))
+        .route("/api/materials/{id}/prices", post(add_price))
         .route("/api/heartbeat", get(heartbeat))
         .fallback(static_asset)
         .layer(DefaultBodyLimit::max(16 * 1024))
@@ -232,26 +265,112 @@ async fn session(State(state): State<AppState>, Json(input): Json<Session>) -> R
     );
     (StatusCode::NO_CONTENT, [("set-cookie", cookie)]).into_response()
 }
-async fn list(State(state): State<AppState>) -> Result<impl IntoResponse, ApiError> {
-    Ok(Json(state.with_store(|s| s.list()).await?))
+async fn catalog_state(State(state): State<AppState>) -> Result<impl IntoResponse, ApiError> {
+    Ok(Json(state.with_store(|s| s.catalog_state()).await?))
+}
+async fn list(
+    State(state): State<AppState>,
+    input: Result<Query<CatalogFilter>, QueryRejection>,
+) -> Result<impl IntoResponse, ApiError> {
+    let Query(filter) = input
+        .map_err(|error| ApiError(StatusCode::BAD_REQUEST, error.body_text(), "validation"))?;
+    Ok(Json(
+        state.with_store(move |s| s.catalog_list(filter)).await?,
+    ))
 }
 async fn detail(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
     let material = state
-        .with_store(move |s| s.get(&id))
+        .with_store(move |s| s.catalog_detail(&id))
         .await?
-        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "재료를 찾을 수 없습니다.".into()))?;
+        .ok_or_else(|| {
+            ApiError(
+                StatusCode::NOT_FOUND,
+                "재료를 찾을 수 없습니다.".into(),
+                "not_found",
+            )
+        })?;
     Ok(Json(material))
 }
 async fn create(
     State(state): State<AppState>,
-    Json(input): Json<CreateMaterial>,
-) -> Result<impl IntoResponse, ApiError> {
+    input: Result<Json<Value>, JsonRejection>,
+) -> Result<Response, ApiError> {
+    let input = catalog_input(input)?;
+    let object = input.as_object().ok_or_else(|| {
+        ApiError(
+            StatusCode::BAD_REQUEST,
+            "재료 입력은 JSON 객체여야 합니다.".into(),
+            "validation",
+        )
+    })?;
+    // Only the original narrow shape can bypass metadata. Extended inputs must
+    // never silently fall back when their revision or epoch is missing.
+    if object
+        .keys()
+        .all(|key| matches!(key.as_str(), "request_id" | "name" | "unit"))
+    {
+        let input: CreateMaterial = serde_json::from_value(input)
+            .map_err(|error| ApiError(StatusCode::BAD_REQUEST, error.to_string(), "validation"))?;
+        return Ok((
+            StatusCode::CREATED,
+            Json(state.with_store(move |s| s.create(input)).await?),
+        )
+            .into_response());
+    }
+    let input: CreateCatalogMaterial = serde_json::from_value(input)
+        .map_err(|error| ApiError(StatusCode::BAD_REQUEST, error.to_string(), "validation"))?;
     Ok((
         StatusCode::CREATED,
-        Json(state.with_store(move |s| s.create(input)).await?),
+        Json(state.with_store(move |s| s.catalog_create(input)).await?),
+    )
+        .into_response())
+}
+async fn revise(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    input: Result<Json<ReviseCatalogMaterial>, JsonRejection>,
+) -> Result<impl IntoResponse, ApiError> {
+    let input = catalog_input(input)?;
+    Ok((
+        StatusCode::CREATED,
+        Json(
+            state
+                .with_store(move |s| s.catalog_revise(&id, input))
+                .await?,
+        ),
+    ))
+}
+async fn archive(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    input: Result<Json<ArchiveCatalogMaterial>, JsonRejection>,
+) -> Result<impl IntoResponse, ApiError> {
+    let input = catalog_input(input)?;
+    Ok((
+        StatusCode::CREATED,
+        Json(
+            state
+                .with_store(move |s| s.catalog_archive(&id, input))
+                .await?,
+        ),
+    ))
+}
+async fn add_price(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    input: Result<Json<CreateCatalogPrice>, JsonRejection>,
+) -> Result<impl IntoResponse, ApiError> {
+    let input = catalog_input(input)?;
+    Ok((
+        StatusCode::CREATED,
+        Json(
+            state
+                .with_store(move |s| s.catalog_add_price(&id, input))
+                .await?,
+        ),
     ))
 }
 

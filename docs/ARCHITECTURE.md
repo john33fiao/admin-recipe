@@ -51,12 +51,16 @@ heartbeat는 복수 연결·재연결 유예·관측 공백을 구분하고 수�
 | `src/server.rs` | API·세션·Host/Origin 검증·정적 라우팅·WebSocket 작업 관리 |
 | `src/lifecycle.rs` | 복수 연결·만료·재연결·초기 대기·관측 공백의 수명 상태 |
 | `src/store.rs` | 단일 작성자 잠금·SQLite 스키마/트랜잭션·요청 중복 방지·JSON 발행/복구 |
+| `src/store/catalog.rs`, `src/catalog.rs` | 품목 버전·사전 가격·검색·아카이브와 요청 응답 보존·catalog DTO |
+| `src/domain/` | 6자리 고정소수 수량/금액·단위 환산·가격 출처 선택 |
 | `frontend/app/` | 한국어 재료 등록·목록·상세·연결 안내·실패 요청 재시도 |
 | `scripts/build.mjs`, `build.rs` | 정적 생성·입력/산출물 해시·자산 내장 검증·release 빌드 경로 치환 |
 | `scripts/verify-windows.mjs` | 격리 Chrome/Edge의 실제 30분 백그라운드·브라우저 강제 종료 검증 |
 | `tests/`, `frontend/e2e/` | 가상 자료로 저장·장애·마이그레이션·HTTP·소켓·브라우저 검증 |
 
-스키마 v2·JSON 형식 v1, 파일 구성·저장 완료 의미·호환/복구는 ADR-006에 정의했다. 과거 DB 테스트는 합성 v1 fixture이며 실제 정식 이전 버전의 회귀 검증을 대신하지 않는다. 실행 시 외부 Node·SQLite 개발 도구를 호출하지 않는다. 현재 macOS 산출물의 동적 의존성은 OS 제공 프레임워크와 라이브러리로 확인했다.
+T-003은 스키마 v3·JSON 형식 v2로 확장한다. 기존 `materials`·생성 요청·JSON v1 원문은 보존하고 품목 버전/head·사전 가격·불변 변경 응답·epoch/revision을 추가한다. 초기 revision은 0이며 성공한 영속 변경의 seq로 갱신한다. JSON v2의 `state`는 품목 원본·모든 버전/가격·요청 기록을 포함하며 outbox 원문을 재귀적으로 담지 않는다. 같은 요청 재시도는 현재 품목 대신 당시 응답을 반환하며, JSON 복구가 끝나기 전에 성공 응답하거나 다음 변경을 적용하지 않는다.
+
+파일 구성·저장 완료 의미·기존 호환/복구 기준은 ADR-006을 유지한다. 과거 DB 테스트에는 합성 v1과 T-001의 v2 구조 fixture를 사용하며 실제 정식 이전 버전의 회귀 검증을 대신하지 않는다. 상세 확장과 검증 범위는 [T-003 계획](tickets/T-003-plan.md)을 따른다. 실행 시 외부 Node·SQLite 개발 도구를 호출하지 않는다. 기존 macOS 산출물의 동적 의존성은 OS 제공 프레임워크와 라이브러리로 확인했으며 T-003 변경분의 macOS 실행은 별도 미검증이다.
 
 ## 남은 구현 설계
 

@@ -18,7 +18,7 @@ T-002는 계산·데이터 계약, T-020은 공통 UI 기반으로 서로 독립
 | --- | --- | --- |
 | [T-001: Rust·Nuxt 휴대 실행 검증과 첫 저장 흐름](T-001-portable-local-app.md) | 진행 중 — 실환경 미검증 유지 | 없음 |
 | [T-002: 수량·원가와 소모 보정 계산 계약](T-002-domain-contract.md) | 1차 · 설계 완료 — 독립 검토 통과 | 없음 |
-| [T-003: 재료·상태·단위와 사전 가격 관리](T-003-materials-and-units.md) | 1차 · 착수 가능 | [T-002](T-002-domain-contract.md), [T-020](T-020-ui-foundation.md) |
+| [T-003: 재료·상태·단위와 사전 가격 관리](T-003-materials-and-units.md) | 1차 · 완료 — 재료/사전 가격 검증, 보유 원장 연결은 T-007 | [T-002](T-002-domain-contract.md), [T-020](T-020-ui-foundation.md) |
 | [T-004: 레시피·메뉴 복제와 사전 원가 계산](T-004-recipes-and-costs.md) | 1차 · 대기 | [T-003](T-003-materials-and-units.md), [T-005](T-005-business-history.md) |
 | [T-005: 업무 기록·임시 저장·확정과 JSON 기록 확장](T-005-business-history.md) | 1차 · 대기 | [T-002](T-002-domain-contract.md), [T-003](T-003-materials-and-units.md) |
 | [T-006: 발주 내역과 미입고 주문량](T-006-purchase-orders.md) | 1차 · 대기 | [T-003](T-003-materials-and-units.md), [T-005](T-005-business-history.md) |

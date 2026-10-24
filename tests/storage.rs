@@ -109,13 +109,13 @@ fn each_json_keeps_the_full_state_in_sequence_and_prior_bytes_never_change() {
     assert_eq!(fs::read(first_path).unwrap(), first_bytes);
     let old: Value = serde_json::from_slice(&first_bytes).unwrap();
     let new: Value = serde_json::from_slice(&fs::read(&files[1]).unwrap()).unwrap();
-    assert_eq!(old["format_version"], 1);
-    assert_eq!(old["schema_version"], 2);
-    assert_eq!(old["sequence"], 1);
-    assert_eq!(old["materials"].as_array().unwrap().len(), 1);
-    assert_eq!(old["materials"][0]["id"], first.id);
-    assert_eq!(new["sequence"], 2);
-    let materials = new["materials"].as_array().unwrap();
+    assert_eq!(old["format_version"], 2);
+    assert_eq!(old["schema_version"], 3);
+    assert_eq!(old["sequence"], "1");
+    assert_eq!(old["state"]["materials"].as_array().unwrap().len(), 1);
+    assert_eq!(old["state"]["materials"][0]["id"], first.id);
+    assert_eq!(new["sequence"], "2");
+    let materials = new["state"]["materials"].as_array().unwrap();
     assert_eq!(materials.len(), 2);
     assert!(
         materials
@@ -246,7 +246,7 @@ fn synthetic_v1_is_backed_up_and_migrated_preserving_materials() {
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        2
+        3
     );
     let backups: Vec<_> = fs::read_dir(directory.path().join("backups"))
         .unwrap()

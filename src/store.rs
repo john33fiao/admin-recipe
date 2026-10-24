@@ -1,7 +1,6 @@
 use anyhow::{Context, bail};
-use chrono::{SecondsFormat, Utc};
 use fs2::FileExt;
-use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
+use rusqlite::{Connection, OpenFlags, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::{
     fs::{self, File, OpenOptions},
@@ -12,7 +11,9 @@ use std::{
 use tempfile::NamedTempFile;
 use uuid::Uuid;
 
-const SCHEMA_VERSION: i64 = 2;
+mod catalog;
+
+const SCHEMA_VERSION: i64 = 3;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Material {
@@ -22,7 +23,7 @@ pub struct Material {
     pub created_at: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateMaterial {
     pub request_id: String,
     pub name: String,
@@ -33,15 +34,17 @@ pub struct CreateMaterial {
 pub enum StoreError {
     Validation(String),
     Conflict(String),
+    StaleState(String),
     Unavailable(String),
 }
 
 impl std::fmt::Display for StoreError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Validation(message) | Self::Conflict(message) | Self::Unavailable(message) => {
-                formatter.write_str(message)
-            }
+            Self::Validation(message)
+            | Self::Conflict(message)
+            | Self::StaleState(message)
+            | Self::Unavailable(message) => formatter.write_str(message),
         }
     }
 }
@@ -125,95 +128,33 @@ impl Store {
     }
 
     pub fn list(&self) -> Result<Vec<Material>, StoreError> {
-        read_materials(&self.connection).map_err(unavailable)
+        self.catalog_list(crate::catalog::CatalogFilter::default())
+            .map(|items| {
+                items
+                    .into_iter()
+                    .map(|item| Material {
+                        id: item.id,
+                        name: item.name,
+                        unit: item.unit,
+                        created_at: item.created_at,
+                    })
+                    .collect()
+            })
     }
 
     pub fn get(&self, id: &str) -> Result<Option<Material>, StoreError> {
-        self.connection
-            .query_row(
-                "SELECT id, name, unit, created_at FROM materials WHERE id = ?1",
-                [id],
-                material_from_row,
-            )
-            .optional()
-            .map_err(unavailable)
+        self.catalog_detail(id).map(|detail| {
+            detail.map(|detail| Material {
+                id: detail.item.id,
+                name: detail.item.name,
+                unit: detail.item.unit,
+                created_at: detail.item.created_at,
+            })
+        })
     }
 
     pub fn create(&mut self, input: CreateMaterial) -> Result<Material, StoreError> {
-        let input = validate_input(input)?;
-        let previous: Option<(String, String, String)> = self
-            .connection
-            .query_row(
-                "SELECT name, unit, material_id FROM creation_requests WHERE request_id = ?1",
-                [&input.request_id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-            )
-            .optional()
-            .map_err(unavailable)?;
-        if let Some((name, unit, id)) = previous {
-            if name != input.name || unit != input.unit {
-                return Err(StoreError::Conflict(
-                    "같은 요청 ID에 다른 입력을 사용할 수 없습니다".into(),
-                ));
-            }
-            self.recover()?;
-            return self.get(&id)?.ok_or_else(|| {
-                StoreError::Unavailable("등록 요청에 연결된 재료를 찾을 수 없습니다".into())
-            });
-        }
-
-        // A failed publication must be resolved before any later mutation.
-        self.recover()?;
-        let material = Material {
-            id: Uuid::new_v4().to_string(),
-            name: input.name,
-            unit: input.unit,
-            created_at: Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true),
-        };
-        let transaction = self.connection.transaction().map_err(unavailable)?;
-        transaction
-            .execute(
-                "INSERT INTO materials (id, name, unit, created_at) VALUES (?1, ?2, ?3, ?4)",
-                params![
-                    material.id,
-                    material.name,
-                    material.unit,
-                    material.created_at
-                ],
-            )
-            .map_err(unavailable)?;
-        transaction.execute(
-            "INSERT INTO creation_requests (request_id, name, unit, material_id) VALUES (?1, ?2, ?3, ?4)",
-            params![input.request_id, material.name, material.unit, material.id],
-        ).map_err(unavailable)?;
-        transaction
-            .execute(
-                "INSERT INTO snapshot_outbox (payload, published) VALUES ('', 0)",
-                [],
-            )
-            .map_err(unavailable)?;
-        let sequence = transaction.last_insert_rowid();
-        let snapshot = Snapshot {
-            format_version: 1,
-            schema_version: SCHEMA_VERSION,
-            sequence,
-            request_id: input.request_id,
-            recorded_at: material.created_at.clone(),
-            materials: read_materials(&transaction).map_err(unavailable)?,
-        };
-        let payload = serde_json::to_string_pretty(&snapshot).map_err(unavailable)? + "\n";
-        transaction
-            .execute(
-                "UPDATE snapshot_outbox SET payload = ?1 WHERE sequence = ?2",
-                params![payload, sequence],
-            )
-            .map_err(unavailable)?;
-        transaction.commit().map_err(unavailable)?;
-
-        self.recover().map_err(|error| StoreError::Unavailable(format!(
-            "재료는 DB에 저장되었지만 JSON 기록을 완료하지 못했습니다. 같은 요청으로 다시 시도하세요: {error}"
-        )))?;
-        Ok(material)
+        self.legacy_create(input)
     }
 
     /// Verify retained immutable files and regenerate missing ones, including
@@ -238,11 +179,20 @@ impl Store {
                     |row| row.get(0),
                 )
                 .map_err(unavailable)?;
-            let snapshot: Snapshot = serde_json::from_str(&payload).map_err(unavailable)?;
-            if snapshot.format_version != 1
-                || !(1..=SCHEMA_VERSION).contains(&snapshot.schema_version)
-                || snapshot.sequence != sequence
-            {
+            let header: serde_json::Value = serde_json::from_str(&payload).map_err(unavailable)?;
+            let supported = match header.get("format_version").and_then(|v| v.as_u64()) {
+                Some(1) => {
+                    let snapshot: Snapshot = serde_json::from_str(&payload).map_err(unavailable)?;
+                    (1..=2).contains(&snapshot.schema_version) && snapshot.sequence == sequence
+                }
+                Some(2) => {
+                    let snapshot: catalog::SnapshotV2 =
+                        serde_json::from_str(&payload).map_err(unavailable)?;
+                    snapshot.schema_version == 3 && snapshot.sequence == sequence.to_string()
+                }
+                _ => false,
+            };
+            if !supported {
                 return Err(StoreError::Unavailable(
                     "지원하지 않거나 손상된 JSON 변경 기록입니다".into(),
                 ));
@@ -357,6 +307,7 @@ fn validate_schema(connection: &Connection) -> anyhow::Result<()> {
     connection.prepare("SELECT sequence, payload, published FROM snapshot_outbox LIMIT 0")?;
     connection
         .prepare("SELECT request_id, name, unit, material_id FROM creation_requests LIMIT 0")?;
+    catalog::validate_catalog_schema(connection)?;
     let violation: Option<String> = connection
         .query_row("PRAGMA foreign_key_check", [], |row| row.get(0))
         .optional()?;
@@ -414,6 +365,10 @@ fn migrate(connection: &mut Connection, starting_version: i64) -> anyhow::Result
             );
             PRAGMA user_version = 2;",
         )?;
+        version = 2;
+    }
+    if version == 2 {
+        catalog::migrate_catalog(&transaction)?;
     }
     validate_schema(&transaction)?;
     transaction.commit()?;

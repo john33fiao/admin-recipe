@@ -206,7 +206,7 @@ test('three widths and two themes keep overview, form, list and detail usable', 
 
       await page.goto(new URL(detailPath!, launchUrl).toString())
       await expect(page.getByRole('heading', { name, exact: true })).toBeVisible()
-      await expect(page.getByText('가상 관리 단위', { exact: true })).toBeVisible()
+      await expect(page.locator('.detail-fields').first().getByText('가상 관리 단위', { exact: true })).toBeVisible()
       await expectFits(page)
       await page.screenshot({ path: test.info().outputPath(`detail-${width}-${theme}.png`), fullPage: true })
     }

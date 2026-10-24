@@ -9,7 +9,7 @@ useHead({ title: '작업 시작 | 순창한상' })
   </div>
   <section class="overview-panel" aria-labelledby="overview-materials-title" :aria-busy="loading">
     <div class="list-heading">
-      <h2 id="overview-materials-title">등록한 재료</h2>
+      <h2 id="overview-materials-title">사용 중인 재료</h2>
       <button class="text-button" type="button" :disabled="!available || loading" @click="loadMaterials">{{ loading ? '불러오는 중…' : '새로고침' }}</button>
     </div>
     <div v-if="loadFailure" class="notice warning" role="alert">{{ loadFailure }}</div>

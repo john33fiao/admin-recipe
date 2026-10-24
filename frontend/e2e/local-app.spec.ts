@@ -95,8 +95,8 @@ test('register, detail reload, restart and stopped data move preserve IDs withou
   const snapshotFiles = readdirSync(join(directory, 'db', 'snapshots'))
   expect(snapshotFiles.filter(x => x.endsWith('.json'))).toHaveLength(1)
   const snapshot = JSON.parse(readFileSync(join(directory, 'db', 'snapshots', snapshotFiles[0]!), 'utf8'))
-  expect(snapshot.materials[0].unit).toBe('장')
-  expect(detailPath.endsWith(snapshot.materials[0].id)).toBeTruthy()
+  expect(snapshot.state.materials[0].unit).toBe('장')
+  expect(detailPath.endsWith(snapshot.state.materials[0].id)).toBeTruthy()
   await stop()
   // Replace only the stopped executable, preserving the complete db directory.
   cpSync(source, binary)
