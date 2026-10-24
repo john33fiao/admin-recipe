@@ -1,5 +1,7 @@
 # 요구사항 일괄 재검사 · 2026-10-24
 
+> 최신 상태: 같은 날 후속 인터뷰의 [ADR-007](decisions/ADR-007-consumption-and-ticket-scope.md)에서 실사로 소모 확정·판매 개수 비례 배분·현재 평균 단가 반품을 채택했다. 아래 기존 재검사는 당시 이력이다. 최신 범위는 문서 끝의 [티켓 대응표](#티켓-대응표--2026-10-24)와 [요구사항](REQUIREMENTS.md)을 따른다.
+
 ## 판정
 
 **핵심 범위와 O-01~O-04의 네 운영 정책이 확정됐다.** 초기 요구사항·화면 설계·레포 초기화 채팅과 후속 사용자 결정을 32개 점검 묶음으로 대조했다. 축약된 조회·화면·후속 범위를 보완했고, 재검사 때 분리한 네 권장 방향은 2026-10-24 사용자 승인으로 모두 채택했다. 이후 기술스택 인터뷰로 이어졌다.
@@ -81,4 +83,65 @@ SQLite는 OS·아키텍처 간 이동 가능한 파일 형식을 제공하므로
 - 공개 요구사항, 구조, TODO, 현재 ADR, 로컬 연결 설정, 기획 노트를 읽었다.
 - 스킬 전체 트리 25개 파일과 호환 링크, 노트 위치, MIT·저장소 URL 고지를 확인했다.
 - 문서 링크·결정 목록·예시 계산·UTF-8/LF·변경 diff·Git 인덱스 보존을 확인했다.
-- 앱 실행·빌드·재고 계산 구현·파일 복원은 미검증이다. 아직 앱 코드가 없으며 이번 범위는 문서 재검사다.
+- 당시 앱 실행·빌드·재고 계산 구현·파일 복원은 미검증이었다. 이후 T-001의 실행/재료 저장 기반을 구현했으며 현재 상태는 해당 티켓을 따른다.
+
+## 티켓 대응표 · 2026-10-24
+
+아래가 최신 상태다. 위 A-01~A-32 표는 당시 재검사 이력이며 정책이 달라진 항목은 아래 대체 관계와 ADR-007을 따른다. T-002~T-030 작성은 구현 완료가 아니다.
+
+| 기존 ID | 요구 묶음 | 담당 티켓 | 최신 처리 |
+| --- | --- | --- | --- |
+| A-01 | 단일 셰프·PC | [T-001](tickets/T-001-portable-local-app.md), [T-020](tickets/T-020-ui-foundation.md), [T-021](tickets/T-021-first-release-verification.md) | 유지 |
+| A-02 | 1차 업무 전체 | [T-002](tickets/T-002-domain-contract.md), [T-003](tickets/T-003-materials-and-units.md), [T-004](tickets/T-004-recipes-and-costs.md), [T-005](tickets/T-005-business-history.md), [T-006](tickets/T-006-purchase-orders.md), [T-007](tickets/T-007-receipts.md), [T-008](tickets/T-008-production.md), [T-009](tickets/T-009-sales-consumption.md), [T-010](tickets/T-010-stocktake-and-waste.md), [T-011](tickets/T-011-late-receipt-reconciliation.md), [T-012](tickets/T-012-corrections-and-versions.md), [T-013](tickets/T-013-purchase-returns.md), [T-014](tickets/T-014-closing-workspace.md), [T-015](tickets/T-015-photos-and-suppliers.md), [T-016](tickets/T-016-statistics-and-history.md), [T-017](tickets/T-017-operations-overview.md), [T-018](tickets/T-018-full-state-restore.md), [T-019](tickets/T-019-data-compatibility.md), [T-020](tickets/T-020-ui-foundation.md), [T-021](tickets/T-021-first-release-verification.md) | 티켓 분해 |
+| A-03 | 내일 메뉴 계획·작업시간 | [T-022](tickets/T-022-next-day-menu-plan.md), [T-023](tickets/T-023-work-time-history.md) | 2차 구체화 |
+| A-04 | 시설 카테고리/항목·일일 완료 | [T-024](tickets/T-024-facility-checks.md) | 백로그 |
+| A-05 | 부분 입고·보관 위치 | [T-025](tickets/T-025-partial-receipts.md), [T-026](tickets/T-026-storage-locations.md) | 백로그 |
+| A-06 | 소비기한·POS·초기 자료 이관 제외 | — | 요구사항 제외 범위로 추적; 구현 티켓 없음 |
+| A-07 | 원물·손질·비축·판매 직접 참조 | [T-002](tickets/T-002-domain-contract.md), [T-003](tickets/T-003-materials-and-units.md), [T-004](tickets/T-004-recipes-and-costs.md), [T-008](tickets/T-008-production.md) | 유지 |
+| A-08 | 판매 전 원물·손질·비축 관리 | [T-003](tickets/T-003-materials-and-units.md), [T-008](tickets/T-008-production.md), [T-010](tickets/T-010-stocktake-and-waste.md) | 실사 중심 표시 |
+| A-09 | 실제 수량 손질/생산 | [T-008](tickets/T-008-production.md) | 수율 강제 제외 유지 |
+| A-10 | 고유 ID·단위·환산 | [T-002](tickets/T-002-domain-contract.md), [T-003](tickets/T-003-materials-and-units.md), [T-004](tickets/T-004-recipes-and-costs.md) | 유지 |
+| A-11 | 메뉴 1개·크기·독립 복제 | [T-004](tickets/T-004-recipes-and-costs.md) | 유지 |
+| A-12 | 이름 검색·양방향 연결 | [T-003](tickets/T-003-materials-and-units.md), [T-004](tickets/T-004-recipes-and-costs.md), [T-016](tickets/T-016-statistics-and-history.md) | 유지 |
+| A-13 | 조리 정보·원가·판매 통계 | [T-004](tickets/T-004-recipes-and-costs.md), [T-009](tickets/T-009-sales-consumption.md), [T-016](tickets/T-016-statistics-and-history.md) | 판매가·금액·단순 원가율 추가 |
+| A-14 | 재료별 메뉴 사용·소모 차이 | [T-010](tickets/T-010-stocktake-and-waste.md), [T-016](tickets/T-016-statistics-and-history.md) | 예상 차감 대신 실사 소모·판매 개수 비례 배분 |
+| A-15 | 사진·설명·구입처 | [T-015](tickets/T-015-photos-and-suppliers.md) | 여러 사진/대표·여러 구입처 확정 |
+| A-16 | 실측 발주/입고·조회 | [T-006](tickets/T-006-purchase-orders.md), [T-007](tickets/T-007-receipts.md), [T-017](tickets/T-017-operations-overview.md) | 예상 현재고 제거, 실사 수량/시각·확정 변동 구분 |
+| A-17 | 입고일/입력 시각·지연 입고 | [T-007](tickets/T-007-receipts.md), [T-011](tickets/T-011-late-receipt-reconciliation.md) | 실사 포함 수량 확인·중복 방지 |
+| A-18 | 판매·명시 폐기·직원식 | [T-009](tickets/T-009-sales-consumption.md), [T-010](tickets/T-010-stocktake-and-waste.md), [T-014](tickets/T-014-closing-workspace.md) | 판매는 기록, 실사에서 소모 확정 |
+| A-19 | 선택 실사·미확인 유지 | [T-010](tickets/T-010-stocktake-and-waste.md), [T-014](tickets/T-014-closing-workspace.md) | 유지 |
+| A-20 | 일괄 실사·차이 처리 | [T-010](tickets/T-010-stocktake-and-waste.md) | 자동 폐기 폐지, 판매 개수 배분/미배분 |
+| A-21 | 보유 평균 원가 | [T-002](tickets/T-002-domain-contract.md), [T-003](tickets/T-003-materials-and-units.md), [T-004](tickets/T-004-recipes-and-costs.md), [T-007](tickets/T-007-receipts.md), [T-010](tickets/T-010-stocktake-and-waste.md) | 사전 가격·마지막 단가·0원 지원 추가 |
+| A-22 | 손질 원가 이월 | [T-008](tickets/T-008-production.md) | 다중 결과물 주 100% 기본·수정 가능 |
+| A-23 | 손실 원가 배분 | [T-010](tickets/T-010-stocktake-and-waste.md) | 명시 폐기에만 잔존 배분/전량 종료; 정상 소모는 가치 차감 |
+| A-24 | 취소·반품 | [T-006](tickets/T-006-purchase-orders.md), [T-012](tickets/T-012-corrections-and-versions.md), [T-013](tickets/T-013-purchase-returns.md) | 반품은 현재 평균 단가; 원구입액 참고 보존 |
+| A-25 | 바이너리+db/·사진 | [T-001](tickets/T-001-portable-local-app.md), [T-015](tickets/T-015-photos-and-suppliers.md), [T-019](tickets/T-019-data-compatibility.md) | 유지 |
+| A-26 | 변경마다 JSON·무기한 | [T-001](tickets/T-001-portable-local-app.md), [T-005](tickets/T-005-business-history.md), [T-018](tickets/T-018-full-state-restore.md), [T-021](tickets/T-021-first-release-verification.md) | 업무·버전/배분까지 확장 |
+| A-27 | 전체 복원·사진·잠금 제외 | [T-015](tickets/T-015-photos-and-suppliers.md), [T-018](tickets/T-018-full-state-restore.md) | 유지 |
+| A-28 | OS 데이터 이동·서버 이관 | [T-019](tickets/T-019-data-compatibility.md), [T-027](tickets/T-027-cross-os-data-transfer.md), [T-028](tickets/T-028-server-migration.md) | 같은 OS 1차, OS 왕복 백로그, 서버 후속 |
+| A-29 | 반응형·테마·스크롤 | [T-020](tickets/T-020-ui-foundation.md), [T-021](tickets/T-021-first-release-verification.md) | 유지 |
+| A-30 | 기존 화면은 참고 | [T-020](tickets/T-020-ui-foundation.md) | 유지 |
+| A-31 | 직접 개발·공개·MIT | [T-001](tickets/T-001-portable-local-app.md), [T-021](tickets/T-021-first-release-verification.md) | 각 티켓 공통 완료 조건으로 지속 검증 |
+| A-32 | 공개 요구·연결 노트 동기화 | [T-021](tickets/T-021-first-release-verification.md) | 모든 티켓 공통 완료 조건으로 유지 |
+
+추가 결정의 대응: P-01→T-004·T-009·T-016, P-02·P-11→T-003·T-004·T-009·T-012, P-03→T-002~T-004, P-04→T-008, P-05·P-06→T-006·T-007, P-07→T-011, P-08→T-009·T-010·T-014·T-016·T-017·T-030, P-09→T-009·T-012, P-10→T-013, P-12→T-015이다. 원가 확장 검토는 T-029에 보존한다.
+
+신규 티켓 문서에는 목적·포함/제외·선행·수용 기준·검증 방법·남은 결정·미실행 상태를 담았다. 1차에 확정한 정책과 2차/백로그 착수 시 남은 결정을 구분한다. 제외 항목을 실행 가능한 기능 티켓으로 되살리지 않는다.
+
+## 티켓 전환 검토 결과
+
+검토 대상은 문서 전환이다. 앱 구현·실행 테스트·실환경 배포 검증은 수행하지 않았으며 T-001의 미검증 항목을 유지했다.
+
+- [Step 1] 목적 적합성 - PASS: 기존 A-01~A-32와 후속 P-/Q- 결정을 담당 티켓 또는 명시적 제외 범위로 연결했다.
+- [Step 2] 오류·중요 문제·보안 - PASS: 공개 문서의 개인 경로·비공개 자료 패턴을 점검했고 가상 사례만 추가했다.
+- [Step 3] 회귀 - PASS: 대체된 정책은 ADR-007로 명시하고 실행/저장 범위·기존 검증 결과를 유지했다. 연결 노트의 메타데이터·기존 링크·엑셀 분석·화면 참고와 기존 변경을 보존했다.
+- [Step 4] 파일·함수 크기 - PASS: 기능별 티켓과 공통 완료 조건으로 나눴으며 제품 코드를 변경하지 않았다.
+- [Step 5] 재사용·통합 - PASS: 기존 요구사항·TODO·ADR·티켓 색인을 사용했다. 별도 작업 관리 서비스를 도입하지 않았다.
+- [Step 6] 부작용 - PASS: 문서만 변경했다. 외부 전송·배포·백그라운드 서비스·DB/운영 자료 변경은 없다.
+- [Step 7] 전체 변경 재검토 - PASS: 추적 diff와 신규 티켓을 재읽고 정책·의존 관계를 대조했다.
+- [Step 8] 불필요한 잔여물 - PASS: 초안의 원구입액 차감 표현과 후속 기능을 선행 완료 조건으로 요구하던 문장을 수정했다.
+- [Step 9] 품질 검증 - PASS: 상대 링크/앵커·UTF-8/LF·티켓 ID/의존 순환·실행 순서·요구 대응·제외 규칙·diff 공백 검사를 수행했다.
+- [Step 10] 사용자·개발자 흐름 - PASS: README→요구사항/TODO→티켓→결정/검증으로 이동한다. 1차 순서와 후속 구체화 대기를 구분했다.
+- [Step 11] 발견 문제의 원인 - PASS: 인터뷰 중 정책 변경으로 남은 초안 표현과 기능 간 완료 조건을 정리하고 관련 티켓을 다시 확인했다.
+- [Step 12] READY 판단 - PASS: 요구사항의 티켓 전환은 READY다. 신규 기능 구현과 T-001 실환경 검증 완료를 뜻하지 않는다. 2차/백로그의 남은 정책은 각 티켓 착수 조건으로 보존한다.
+- [Step 13] 커밋·PR 준비 - PASS: 요청 범위에 없으므로 스테이징·커밋·PR을 수행하지 않았다.
