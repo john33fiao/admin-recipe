@@ -7,6 +7,7 @@ import * as vue from 'vue'
 import * as business from '../app/utils/business.ts'
 import { failureAction } from '../app/utils/catalog.ts'
 import { ApiError } from '../app/utils/api.ts'
+import { blankProductionDraft, blankProductionOutput } from '../app/utils/production.ts'
 
 const recordId = '00000000-0000-4000-8000-000000000001'
 const headId = '00000000-0000-4000-8000-000000000002'
@@ -35,6 +36,71 @@ function harness() {
   runInContext(ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, context)
   return { create: context.useBusinessDraft, storage, requests }
 }
+
+test('production nested edits invalidate preview and preserve original pending through navigation and retry', async () => {
+  const h = harness()
+  const scope = vue.effectScope()
+  const seed = { ...initial, payload: blankProductionDraft() }
+  const editor = scope.run(() => h.create(recordId, seed, async () => null))!
+  const showing = editor.showPreview()
+  h.requests[0]!.resolve({ record_id: recordId, head_id: headId, state: { epoch, revision: '5' }, can_confirm: true, issues: [], effect: { kind: 'production' } })
+  await showing
+  editor.payload.value.data.outputs[0].allocation_percent = '70'
+  assert.equal(editor.dirty.value, true)
+  assert.equal(editor.preview.value, null)
+  editor.payload.value.data.outputs.push(blankProductionOutput(false))
+  editor.payload.value.data.outputs[1].allocation_percent = '30'
+  const saving = editor.send('revise')
+  const original = JSON.stringify(h.requests[1]!.body)
+  assert.equal(h.requests[1]!.path, `/api/production-drafts/${recordId}/revisions`)
+  // Even a late local mutation cannot rewrite a request already sent.
+  editor.payload.value.data.outputs[0].allocation_percent = '40'
+  assert.equal(JSON.stringify(h.requests[1]!.body), original)
+  scope.stop()
+  const nextScope = vue.effectScope()
+  try {
+    const next = nextScope.run(() => h.create(recordId, seed, async () => null))!
+    assert.equal(next.locked.value, true)
+    h.requests[1]!.reject(new ApiError(503, 'uncertain', 'unavailable'))
+    await saving
+    const retry = next.send('revise')
+    assert.equal(h.requests[2]!.path, h.requests[1]!.path)
+    assert.equal(JSON.stringify(h.requests[2]!.body), original)
+    const savedPayload = JSON.parse(original).payload
+    h.requests[2]!.resolve({ result: { item, head: { ...head, payload: savedPayload }, issues: [] }, state: { epoch, revision: '6' } })
+    await retry
+    assert.equal(next.payload.value.data.outputs[0].allocation_percent, '70')
+    assert.equal(next.dirty.value, false)
+    assert.equal(next.pending.value, null)
+    assert.equal(h.storage.size, 0)
+  } finally { nextScope.stop() }
+})
+
+test('only production size rejection enables explicit review while immutable create is retained', async () => {
+  for (const value of [blankProductionDraft(), business.blankPriceDraft()]) {
+    const h = harness()
+    const scope = vue.effectScope()
+    try {
+      const editor = scope.run(() => h.create('new', { ...initial, payload: value, recordId: null, headId: null }, async () => null))!
+      const sending = editor.send('create')
+      assert.equal(h.requests[0]!.path, value.kind === 'production' ? '/api/production-drafts' : '/api/business/drafts')
+      const original = JSON.stringify(editor.pending.value)
+      h.requests[0]!.reject(new ApiError(413, '입력이 너무 큽니다', 'validation'))
+      await sending
+      assert.equal(JSON.stringify(editor.pending.value), original)
+      assert.equal(editor.canReview.value, value.kind === 'production')
+      if (value.kind === 'production') {
+        assert.equal(await editor.send('create'), null)
+        const reviewing = editor.review()
+        h.requests[1]!.resolve({ epoch, revision: '8' })
+        await reviewing
+        assert.equal(editor.pending.value, null)
+        assert.equal(editor.locked.value, false)
+        assert.equal(editor.payload.value.data.outputs[0].allocation_percent, '100')
+      }
+    } finally { scope.stop() }
+  }
+})
 
 test('creating a database draft after navigation clears the old local input and shares its result', async () => {
   const h = harness()

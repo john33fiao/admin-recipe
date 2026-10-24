@@ -183,3 +183,52 @@ fn receipt_nested_sources_and_stock_effects_preserve_unfinished_inputs_and_rejec
         }
     }
 }
+
+#[test]
+fn production_drafts_preserve_incomplete_rows_and_close_every_nested_wire_boundary() {
+    let mut value = input();
+    value["payload"] = json!({"kind":"production","version":1,"data":{
+        "inputs":[{"material_id":null,"material_version_id":null,"quantity":"1.","unit":"kg"}],
+        "outputs":[{"material_id":null,"material_version_id":null,"quantity":"","unit":"",
+            "allocation_percent":"100."}],
+        "note":"가상 생산\r\n확인 필요"
+    }});
+    let decoded: CreateBusinessDraft = serde_json::from_value(value.clone()).unwrap();
+    let normalized = normalize_business_payload(decoded.payload).unwrap();
+    assert_eq!(
+        normalized.kind(),
+        sunchang_hansang::business::BusinessKind::Production
+    );
+    let normalized = serde_json::to_value(normalized).unwrap();
+    assert_eq!(normalized["data"]["inputs"][0]["quantity"], "1.");
+    assert_eq!(normalized["data"]["outputs"][0]["quantity"], "");
+    assert_eq!(
+        normalized["data"]["outputs"][0]["allocation_percent"],
+        "100."
+    );
+    assert_eq!(normalized["data"]["note"], "가상 생산\n확인 필요");
+    for path in [
+        "/payload",
+        "/payload/data",
+        "/payload/data/inputs/0",
+        "/payload/data/outputs/0",
+    ] {
+        let mut wrong = value.clone();
+        wrong
+            .pointer_mut(path)
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .insert("extra".into(), json!(true));
+        assert!(serde_json::from_value::<CreateBusinessDraft>(wrong).is_err());
+    }
+    for (path, replacement) in [
+        ("/payload/version", json!(2)),
+        ("/payload/data/inputs/0/quantity", json!(1)),
+        ("/payload/data/outputs/0/allocation_percent", json!(100)),
+    ] {
+        let mut wrong = value.clone();
+        *wrong.pointer_mut(path).unwrap() = replacement;
+        assert!(serde_json::from_value::<CreateBusinessDraft>(wrong).is_err());
+    }
+}

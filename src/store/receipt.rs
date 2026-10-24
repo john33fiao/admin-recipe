@@ -639,10 +639,23 @@ pub(super) fn validate_snapshot(
     receipts: &[ReceiptRecord],
     closures: &[ClosureRow],
     orders: &[crate::purchase_order::OrderVersion],
-    holdings: &[holding::HoldingVersion],
+    holdings: &[holding::LegacyHoldingVersion],
     heads: &[holding::HoldingHead],
 ) -> Result<(), StoreError> {
+    validate_receipt_links(receipts, closures, orders)?;
     let bad = || unavailable("JSON 입고·보유·주문 종료 참조가 일치하지 않습니다");
+    if holdings.len() != receipts.len() {
+        return Err(bad());
+    }
+    validate_legacy_holdings(receipts, holdings, heads)
+}
+
+pub(super) fn validate_receipt_links(
+    receipts: &[ReceiptRecord],
+    closures: &[ClosureRow],
+    orders: &[crate::purchase_order::OrderVersion],
+) -> Result<(), StoreError> {
+    let bad = || unavailable("JSON 입고·주문 종료 참조가 일치하지 않습니다");
     let mut ids = std::collections::HashSet::new();
     for receipt in receipts {
         validate_record(receipt)?;
@@ -650,12 +663,11 @@ pub(super) fn validate_snapshot(
             return Err(bad());
         }
     }
-    if holdings.len() != receipts.len()
-        || closures.len()
-            != receipts
-                .iter()
-                .filter(|r| matches!(r.source, ReceiptSource::Order { .. }))
-                .count()
+    if closures.len()
+        != receipts
+            .iter()
+            .filter(|r| matches!(r.source, ReceiptSource::Order { .. }))
+            .count()
         || closures.len()
             != orders
                 .iter()
@@ -732,7 +744,17 @@ pub(super) fn validate_snapshot(
             return Err(bad());
         }
     }
-    let mut grouped = std::collections::BTreeMap::<&str, Vec<&holding::HoldingVersion>>::new();
+    Ok(())
+}
+
+fn validate_legacy_holdings(
+    receipts: &[ReceiptRecord],
+    holdings: &[holding::LegacyHoldingVersion],
+    heads: &[holding::HoldingHead],
+) -> Result<(), StoreError> {
+    let bad = || unavailable("JSON 이전 보유·입고 참조가 일치하지 않습니다");
+    let mut grouped =
+        std::collections::BTreeMap::<&str, Vec<&holding::LegacyHoldingVersion>>::new();
     let mut versions = std::collections::HashSet::new();
     let mut used_receipts = std::collections::HashSet::new();
     for version in holdings {

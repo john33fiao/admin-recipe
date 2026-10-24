@@ -164,11 +164,29 @@ fn schema_six_open_adds_empty_recipe_relations_without_rewriting_retained_data()
     let new_schema: i64 = database
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(new_schema, 7, "opening schema6 must install recipe storage");
-    for table in ["recipe_versions", "recipe_lines", "recipe_heads"] {
+    assert_eq!(
+        new_schema, 8,
+        "opening schema6 must install current storage"
+    );
+    for table in [
+        "recipe_versions",
+        "recipe_lines",
+        "recipe_heads",
+        "productions",
+        "production_inputs",
+        "production_outputs",
+        "production_effects",
+    ] {
         assert!(table_rows(&database, table).is_empty(), "{table}");
     }
-    for (table, rows) in before {
+    for (table, mut rows) in before {
+        if table == "holding_versions" {
+            // Schema8 appends two production references; every pre-existing
+            // column remains identical and both new references remain absent.
+            for row in &mut rows {
+                row.extend([SqlValue::Null, SqlValue::Null]);
+            }
+        }
         assert_eq!(table_rows(&database, &table), rows, "{table}");
     }
     for (seq, payload) in journals {
@@ -587,7 +605,7 @@ fn schema_six_requests_replay_exactly_and_holding_prices_feed_new_recipe_snapsho
     )
     .unwrap();
     assert_eq!(newest["format_version"], 2);
-    assert_eq!(newest["schema_version"], 7);
+    assert_eq!(newest["schema_version"], 8);
     for key in ["recipe_versions", "recipe_lines", "recipe_heads"] {
         assert_eq!(newest["state"][key].as_array().unwrap().len(), 1);
     }

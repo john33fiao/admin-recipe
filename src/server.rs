@@ -1,13 +1,14 @@
 use crate::{
     business::{
-        ArchiveBusiness, BusinessFilter, ConfirmBusiness, CreateBusinessDraft, PreviewBusiness,
-        ReviseBusinessDraft,
+        ArchiveBusiness, BusinessFilter, BusinessKind, ConfirmBusiness, CreateBusinessDraft,
+        PreviewBusiness, ReviseBusinessDraft,
     },
     catalog::{
         ArchiveCatalogMaterial, CatalogFilter, CreateCatalogMaterial, CreateCatalogPrice,
         ReviseCatalogMaterial,
     },
     lifecycle::{Lifecycle, Policy},
+    production::ProductionFilter,
     purchase_order::OrderFilter,
     receipt::ReceiptFilter,
     recipe::{CopyRecipe, CreateRecipe, RecipeFilter, ReviseRecipe},
@@ -202,6 +203,16 @@ pub fn router(state: AppState) -> Router {
         .route("/api/business/{id}/preview", post(business_preview))
         .route("/api/business/{id}/confirm", post(business_confirm))
         .route("/api/business/{id}/archive", post(business_archive))
+        .route(
+            "/api/production-drafts",
+            post(production_draft_create).layer(DefaultBodyLimit::max(256 * 1024)),
+        )
+        .route(
+            "/api/production-drafts/{id}/revisions",
+            post(production_draft_revise).layer(DefaultBodyLimit::max(256 * 1024)),
+        )
+        .route("/api/productions", get(production_list))
+        .route("/api/productions/{id}", get(production_detail))
         .route("/api/orders", get(order_list))
         .route("/api/orders/{id}", get(order_detail))
         .route("/api/receipts", get(receipt_list))
@@ -513,6 +524,75 @@ async fn business_archive(
     ))
 }
 
+async fn production_draft_create(
+    State(state): State<AppState>,
+    input: Result<Json<CreateBusinessDraft>, JsonRejection>,
+) -> Result<impl IntoResponse, ApiError> {
+    let input = json_input(input)?;
+    if input.payload.kind() != BusinessKind::Production {
+        return Err(ApiError(
+            StatusCode::BAD_REQUEST,
+            "이 경로에는 생산 초안만 저장할 수 있습니다.".into(),
+            "validation",
+        ));
+    }
+    Ok((
+        StatusCode::CREATED,
+        Json(state.with_store(move |s| s.business_create(input)).await?),
+    ))
+}
+
+async fn production_draft_revise(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    input: Result<Json<ReviseBusinessDraft>, JsonRejection>,
+) -> Result<impl IntoResponse, ApiError> {
+    let input = json_input(input)?;
+    if input.payload.kind() != BusinessKind::Production {
+        return Err(ApiError(
+            StatusCode::BAD_REQUEST,
+            "이 경로에는 생산 초안만 저장할 수 있습니다.".into(),
+            "validation",
+        ));
+    }
+    Ok((
+        StatusCode::CREATED,
+        Json(
+            state
+                .with_store(move |s| s.business_revise(&id, input))
+                .await?,
+        ),
+    ))
+}
+
+async fn production_list(
+    State(state): State<AppState>,
+    input: Result<Query<ProductionFilter>, QueryRejection>,
+) -> Result<impl IntoResponse, ApiError> {
+    let Query(filter) = input
+        .map_err(|error| ApiError(StatusCode::BAD_REQUEST, error.body_text(), "validation"))?;
+    Ok(Json(
+        state.with_store(move |s| s.production_list(filter)).await?,
+    ))
+}
+
+async fn production_detail(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<impl IntoResponse, ApiError> {
+    let detail = state
+        .with_store(move |s| s.production_detail(&id))
+        .await?
+        .ok_or_else(|| {
+            ApiError(
+                StatusCode::NOT_FOUND,
+                "생산 내역을 찾을 수 없습니다.".into(),
+                "not_found",
+            )
+        })?;
+    Ok(Json(detail))
+}
+
 async fn order_list(
     State(state): State<AppState>,
     input: Result<Query<OrderFilter>, QueryRejection>,
@@ -769,6 +849,7 @@ async fn static_asset(_headers: HeaderMap, request: Request<Body>) -> Response {
         || path == "/business"
         || path == "/orders"
         || path == "/receipts"
+        || path == "/productions"
         || path == "/recipes"
         || path == "/recipes/new"
         || path
@@ -782,6 +863,9 @@ async fn static_asset(_headers: HeaderMap, request: Request<Body>) -> Response {
             .is_some_and(|id| uuid::Uuid::parse_str(id).is_ok())
         || path
             .strip_prefix("/receipts/")
+            .is_some_and(|id| uuid::Uuid::parse_str(id).is_ok())
+        || path
+            .strip_prefix("/productions/")
             .is_some_and(|id| uuid::Uuid::parse_str(id).is_ok())
         || path.strip_prefix("/recipes/").is_some_and(|part| {
             uuid::Uuid::parse_str(part).is_ok()

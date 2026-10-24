@@ -3,6 +3,10 @@ use crate::{
     catalog::{CatalogState, MaterialPriceVersion, MutationMeta},
     domain::DomainError,
     holding::{HoldingAmounts, HoldingBasisRef, HoldingObservation},
+    production::{
+        DraftProductionV1, ProductionInputRow, ProductionMaterialEffect, ProductionOutputRow,
+        normalize_production_draft,
+    },
     purchase_order::{OrderAction, OrderProposal, OrderVersion, normalize_order_draft},
     receipt::{DraftReceiptV1, OrderReceiptPreview, normalize_receipt_draft},
 };
@@ -15,6 +19,7 @@ pub enum BusinessKind {
     CatalogPrice,
     PurchaseOrder,
     Receipt,
+    Production,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -86,6 +91,11 @@ pub enum BusinessPayload {
         version: u32,
         data: DraftReceiptV1,
     },
+    Production {
+        #[serde(deserialize_with = "payload_version")]
+        version: u32,
+        data: DraftProductionV1,
+    },
 }
 
 impl BusinessPayload {
@@ -94,13 +104,15 @@ impl BusinessPayload {
             Self::CatalogPrice { .. } => BusinessKind::CatalogPrice,
             Self::PurchaseOrder { .. } => BusinessKind::PurchaseOrder,
             Self::Receipt { .. } => BusinessKind::Receipt,
+            Self::Production { .. } => BusinessKind::Production,
         }
     }
     pub fn version(&self) -> u32 {
         match self {
             Self::CatalogPrice { version, .. }
             | Self::PurchaseOrder { version, .. }
-            | Self::Receipt { version, .. } => *version,
+            | Self::Receipt { version, .. }
+            | Self::Production { version, .. } => *version,
         }
     }
 }
@@ -128,6 +140,7 @@ pub fn normalize_business_payload(
         BusinessPayload::CatalogPrice { data, .. } => normalize_price_draft(data)?,
         BusinessPayload::PurchaseOrder { data, .. } => normalize_order_draft(data)?,
         BusinessPayload::Receipt { data, .. } => normalize_receipt_draft(data)?,
+        BusinessPayload::Production { data, .. } => normalize_production_draft(data)?,
     }
     Ok(payload)
 }
@@ -231,6 +244,9 @@ pub struct BusinessRevision {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum BusinessResult {
+    Production {
+        production_id: String,
+    },
     CatalogPrice {
         price_id: String,
         material_id: String,
@@ -318,6 +334,12 @@ pub struct BusinessMutation {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum BusinessEffect {
+    Production {
+        inputs: Vec<ProductionInputRow>,
+        outputs: Vec<ProductionOutputRow>,
+        materials: Vec<ProductionMaterialEffect>,
+        total_input_value: String,
+    },
     CatalogPrice {
         material_id: String,
         material_version_id: String,

@@ -268,3 +268,20 @@ a.material-row:hover { background: var(--soft); }
   .recipe-cost-rows li { grid-template-columns: minmax(0, 1fr); gap: 10px; }
   .recipe-cost-rows li > strong { text-align: left; }
 }
+
+.production-row-section { margin: 28px 0; }
+.production-row { min-width: 0; margin: 16px 0; padding: 20px; border: 1px solid var(--line); border-radius: 12px; }
+.production-row legend { padding: 0 8px; font-weight: 750; }
+.production-quantity-fields, .production-result-columns, .production-draft-summary { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }
+.production-quantity-fields { grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); }
+.production-result-columns section, .production-draft-summary section { min-width: 0; }
+.production-result a, .production-draft-summary a { overflow-wrap: anywhere; }
+.production-effects { margin-top: 28px; }
+.production-effect { border-top: 1px solid var(--line); padding: 16px 0; }
+.production-effect h4 { margin: 0 0 16px; }
+.production-result details { margin-top: 12px; }
+.production-row .field-error:empty { margin: 0; }
+@media (max-width: 600px) {
+  .production-row { padding: 16px; }
+  .production-result-columns, .production-draft-summary { grid-template-columns: 1fr; }
+}

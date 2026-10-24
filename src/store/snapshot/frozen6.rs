@@ -39,7 +39,7 @@ struct State {
     purchase_order_versions: Vec<OrderVersion>,
     purchase_order_heads: Vec<purchase_order::OrderHead>,
     receipts: Vec<Receipt>,
-    holding_versions: Vec<holding::HoldingVersion>,
+    holding_versions: Vec<holding::LegacyHoldingVersion>,
     holding_heads: Vec<holding::HoldingHead>,
     order_receipt_closures: Vec<receipt::ClosureRow>,
 }
@@ -53,7 +53,7 @@ enum Kind {
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Record {
+pub(super) struct Record {
     id: String,
     kind: Kind,
     created_at: String,
@@ -69,7 +69,7 @@ enum Status {
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Revision {
+pub(super) struct Revision {
     id: String,
     record_id: String,
     previous_revision_id: Option<String>,
@@ -144,7 +144,7 @@ enum OrderStatus {
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct OrderVersion {
+pub(super) struct OrderVersion {
     id: String,
     order_id: String,
     previous_version_id: Option<String>,
@@ -177,7 +177,7 @@ enum ReceiptSource {
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Receipt {
+pub(super) struct Receipt {
     id: String,
     confirmation_id: String,
     business_record_id: String,

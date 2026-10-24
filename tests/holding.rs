@@ -2,9 +2,8 @@ use serde_json::json;
 use sunchang_hansang::{
     domain::{Money, Quantity, UnitPrice},
     holding::{
-        HoldingBasisKind, HoldingBasisRef, HoldingChange, HoldingChangeKind, HoldingInput,
-        HoldingObservation, project_holding, project_receipt, resolve_holding_price,
-        validate_holding_input,
+        HoldingBasisKind, HoldingBasisRef, HoldingChange, HoldingInput, HoldingObservation,
+        project_holding, project_receipt, resolve_holding_price, validate_holding_input,
     },
 };
 use uuid::Uuid;
@@ -36,8 +35,7 @@ fn known(quantity: &str, value: Option<&str>) -> HoldingInput {
     }
 }
 fn change(event: u128, seq: &str, quantity: &str, value: &str) -> HoldingChange {
-    HoldingChange {
-        kind: HoldingChangeKind::Receipt,
+    HoldingChange::Receipt {
         event_id: id(event),
         quantity: quantity.into(),
         value: value.into(),
@@ -261,4 +259,151 @@ fn impossible_basis_and_observation_combinations_are_rejected_and_wire_sequences
     let mut bad = wire;
     bad["seq"] = json!(10);
     assert!(serde_json::from_value::<HoldingBasisRef>(bad).is_err());
+}
+
+fn production(
+    event: u128,
+    seq: &str,
+    input_quantity: &str,
+    input_value: &str,
+    output_quantity: &str,
+    output_value: &str,
+) -> HoldingChange {
+    HoldingChange::Production {
+        event_id: id(event),
+        production_id: id(event + 100),
+        input_quantity: input_quantity.into(),
+        input_value: input_value.into(),
+        output_quantity: output_quantity.into(),
+        output_value: output_value.into(),
+        recorded_at: "2026-01-01T12:00:00.000Z".into(),
+        seq: seq.into(),
+    }
+}
+
+#[test]
+fn first_production_establishes_its_effect_basis_and_is_not_counted_twice() {
+    let changes = [
+        production(1, "10", "0", "0", "2000", "30000"),
+        change(2, "11", "1000", "18000"),
+    ];
+    let mut baseline = known("2000", Some("30000"));
+    baseline.basis.as_mut().unwrap().kind = HoldingBasisKind::Production;
+    let view = project_holding(&baseline, &changes).unwrap();
+    assert_eq!(
+        view,
+        project_holding(&HoldingInput::default(), &changes).unwrap()
+    );
+    assert_eq!(view.basis, baseline.basis);
+    assert_eq!(view.confirmed_changes, changes[1..]);
+    assert!(view.observation.is_none());
+    let result = view.settlement_basis.unwrap();
+    assert_eq!(result.quantity, "3000");
+    assert_eq!(result.value.as_deref(), Some("48000"));
+    assert!(result.source_id.is_none());
+    for wrong in [
+        production(101, "10", "0", "0", "2000", "30000"),
+        production(1, "10", "1", "1", "2000", "30000"),
+        production(1, "10", "0", "0", "2000", "29999"),
+        change(1, "10", "2000", "30000"),
+        production(1, "11", "0", "0", "2000", "30000"),
+    ] {
+        assert!(project_holding(&baseline, &[wrong]).is_err());
+    }
+}
+
+#[test]
+fn full_consumption_retains_zero_then_a_new_receipt_adds_only_its_actual_amount() {
+    let baseline = known("3000", Some("30000"));
+    let used = production(2, "11", "3000", "30000", "0", "0");
+    let empty = project_holding(&baseline, std::slice::from_ref(&used)).unwrap();
+    assert_eq!(empty.basis, baseline.basis);
+    assert_eq!(empty.settlement_basis.as_ref().unwrap().quantity, "0");
+    assert_eq!(empty.settlement_basis.unwrap().value.as_deref(), Some("0"));
+    let restocked = project_holding(&baseline, &[used, change(3, "12", "2", "7")]).unwrap();
+    assert_eq!(restocked.confirmed_changes.len(), 2);
+    assert_eq!(restocked.settlement_basis.as_ref().unwrap().quantity, "2");
+    assert_eq!(
+        restocked.settlement_basis.unwrap().value.as_deref(),
+        Some("7")
+    );
+}
+
+#[test]
+fn production_after_a_corrected_observation_is_applied_once_and_preserves_that_source() {
+    let baseline = observed("10", "30");
+    let changes = [
+        production(9, "9", "100", "100", "0", "0"),
+        production(12, "12", "4", "12", "2", "8"),
+    ];
+    let view = project_holding(&baseline, &changes).unwrap();
+    assert_eq!(view.basis, baseline.basis);
+    assert_eq!(view.observation, baseline.observation);
+    assert_eq!(view.confirmed_changes, changes[1..]);
+    assert_eq!(view.settlement_basis.as_ref().unwrap().quantity, "8");
+    assert_eq!(view.settlement_basis.unwrap().value.as_deref(), Some("26"));
+    assert_eq!(baseline.source_id, Some(id(11)));
+    assert_eq!(baseline.quantity, Some(q("10")));
+    let unchanged = project_holding(&baseline, &[]).unwrap();
+    assert_eq!(
+        unchanged.settlement_basis.unwrap().source_id,
+        baseline.source_id
+    );
+}
+
+#[test]
+fn production_cannot_hide_excess_inputs_with_outputs_or_invent_unknown_values() {
+    let baseline = known("2", Some("6"));
+    for wrong in [
+        production(2, "11", "3", "6", "100", "100"),
+        production(2, "11", "2", "5", "0", "0"),
+        production(2, "11", "1", "4", "0", "0"),
+        production(2, "11", "0", "1", "1", "0"),
+        production(2, "11", "1", "3", "0", "1"),
+        production(2, "11", "0", "0", "0", "0"),
+    ] {
+        assert!(project_holding(&baseline, &[wrong]).is_err());
+    }
+    assert!(
+        project_holding(
+            &HoldingInput::default(),
+            &[production(2, "11", "1", "0", "2", "0")]
+        )
+        .is_err()
+    );
+    assert!(
+        project_holding(
+            &known("2", None),
+            &[production(2, "11", "0", "0", "1", "0")]
+        )
+        .is_err()
+    );
+    let net_zero = production(2, "11", "1", "3", "1", "3");
+    let view = project_holding(&baseline, std::slice::from_ref(&net_zero)).unwrap();
+    assert_eq!(view.confirmed_changes, vec![net_zero]);
+    assert_eq!(view.settlement_basis.as_ref().unwrap().quantity, "2");
+    assert_eq!(view.settlement_basis.unwrap().value.as_deref(), Some("6"));
+}
+
+#[test]
+fn receipt_change_wire_bytes_remain_compatible_and_production_fields_are_closed() {
+    let receipt = r#"{"kind":"receipt","event_id":"00000000-0000-0000-0000-000000000001","quantity":"1","value":"0","recorded_at":"2026-01-01T12:00:00.000Z","seq":"10"}"#;
+    let decoded: HoldingChange = serde_json::from_str(receipt).unwrap();
+    assert_eq!(serde_json::to_string(&decoded).unwrap(), receipt);
+    let valid = serde_json::to_value(production(2, "11", "1", "0", "0", "0")).unwrap();
+    assert!(serde_json::from_value::<HoldingChange>(valid.clone()).is_ok());
+    for (field, value) in [
+        ("quantity", json!("1")),
+        ("input_quantity", json!(1)),
+        ("seq", json!(11)),
+        ("kind", json!("sale")),
+    ] {
+        let mut wrong = valid.clone();
+        wrong[field] = value;
+        assert!(serde_json::from_value::<HoldingChange>(wrong).is_err());
+    }
+    let mut wrong = valid;
+    wrong["production_id"] = json!("not-a-uuid");
+    let wrong: HoldingChange = serde_json::from_value(wrong).unwrap();
+    assert!(project_holding(&known("1", Some("0")), &[wrong]).is_err());
 }

@@ -1,8 +1,10 @@
 //! Pure numeric contracts. No database, HTTP, or file access belongs here.
+mod allocation;
 mod number;
 mod price;
 mod unit;
 
+pub use allocation::allocate_largest_remainder;
 pub use number::{Money, Quantity, round_ratio};
 pub use price::{HoldingBasis, ResolvedPrice, UnitPrice, resolve_price};
 pub use unit::Unit;

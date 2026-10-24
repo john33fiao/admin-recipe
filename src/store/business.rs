@@ -1,4 +1,6 @@
-use super::{Store, StoreError, catalog, purchase_order, receipt, snapshot, unavailable};
+use super::{
+    Store, StoreError, catalog, production, purchase_order, receipt, snapshot, unavailable,
+};
 use crate::{
     business::*,
     catalog::MutationMeta,
@@ -18,6 +20,7 @@ fn parse_kind(kind: &str) -> Result<BusinessKind, StoreError> {
         "catalog_price" => Ok(BusinessKind::CatalogPrice),
         "purchase_order" => Ok(BusinessKind::PurchaseOrder),
         "receipt" => Ok(BusinessKind::Receipt),
+        "production" => Ok(BusinessKind::Production),
         _ => Err(unavailable("지원하지 않는 업무 종류입니다")),
     }
 }
@@ -26,13 +29,15 @@ fn kind_text(kind: BusinessKind) -> &'static str {
         BusinessKind::CatalogPrice => "catalog_price",
         BusinessKind::PurchaseOrder => "purchase_order",
         BusinessKind::Receipt => "receipt",
+        BusinessKind::Production => "production",
     }
 }
-fn result_material_id(result: &BusinessResult) -> &str {
+fn result_material_id(result: &BusinessResult) -> Option<&str> {
     match result {
         BusinessResult::CatalogPrice { material_id, .. }
         | BusinessResult::PurchaseOrder { material_id, .. }
-        | BusinessResult::Receipt { material_id, .. } => material_id,
+        | BusinessResult::Receipt { material_id, .. } => Some(material_id),
+        BusinessResult::Production { .. } => None,
     }
 }
 
@@ -208,6 +213,7 @@ fn confirmation(
         BusinessKind::CatalogPrice => connection.query_row("SELECT p.id,p.material_id,p.material_version_id FROM business_catalog_price_results r JOIN material_prices p ON p.id=r.price_id WHERE r.confirmation_id=?1",[id],|r|Ok(BusinessResult::CatalogPrice{price_id:r.get(0)?,material_id:r.get(1)?,material_version_id:r.get(2)?})).map_err(unavailable)?,
         BusinessKind::PurchaseOrder => purchase_order::result(connection,id)?,
         BusinessKind::Receipt => receipt::result(connection,id)?,
+        BusinessKind::Production => production::result(connection,id)?,
     };
     Ok(Some(BusinessConfirmation {
         id: row.id,
@@ -254,7 +260,9 @@ fn chain(
             .ok_or_else(|| unavailable("정정 원기록 연결이 없습니다"))?;
         if let Some(previous) = events.last() {
             let previous: &BusinessConfirmation = previous;
-            if result_material_id(&previous.result) != result_material_id(&event.result) {
+            if result_material_id(&previous.result).is_none()
+                || result_material_id(&previous.result) != result_material_id(&event.result)
+            {
                 return Err(unavailable("정정 대상 품목이 일치하지 않습니다"));
             }
         }
@@ -303,6 +311,9 @@ fn inspect(
             purchase_order::inspect_order(connection, data)
         }
         BusinessPayload::Receipt { data, .. } => receipt::inspect_receipt(connection, data, today),
+        BusinessPayload::Production { data, .. } => {
+            production::inspect_production(connection, data)
+        }
     }
 }
 fn inspect_price(
@@ -494,6 +505,7 @@ fn detail(
             purchase_order::material_name(connection, data)?
         }
         BusinessPayload::Receipt { data, .. } => receipt::material_name(connection, data)?,
+        BusinessPayload::Production { data, .. } => production::material_name(connection, data)?,
     };
     let item = BusinessSummary {
         id: record.id,
@@ -766,6 +778,7 @@ impl Store {
                         purchase_order::apply_order(tx,data,&event,seq,time)?;
                     }
                     BusinessPayload::Receipt {data,..} => receipt::apply_receipt(tx,data,&event,seq,time,today)?,
+                    BusinessPayload::Production {data,..} => production::apply_production(tx,data,&event,seq,time)?,
                 }
                 if let Some(target) = record.corrects_confirmation_id {
                     tx.execute(

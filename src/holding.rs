@@ -10,6 +10,7 @@ use uuid::Uuid;
 #[serde(rename_all = "snake_case")]
 pub enum HoldingBasisKind {
     Receipt,
+    Production,
     Observation,
 }
 
@@ -42,17 +43,53 @@ pub struct HoldingObservation {
 #[serde(rename_all = "snake_case")]
 pub enum HoldingChangeKind {
     Receipt,
+    Production,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct HoldingChange {
-    pub kind: HoldingChangeKind,
-    pub event_id: String,
-    pub quantity: String,
-    pub value: String,
-    pub recorded_at: String,
-    pub seq: String,
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum HoldingChange {
+    Receipt {
+        event_id: String,
+        quantity: String,
+        value: String,
+        recorded_at: String,
+        seq: String,
+    },
+    Production {
+        event_id: String,
+        production_id: String,
+        input_quantity: String,
+        input_value: String,
+        output_quantity: String,
+        output_value: String,
+        recorded_at: String,
+        seq: String,
+    },
+}
+
+impl HoldingChange {
+    pub fn kind(&self) -> HoldingChangeKind {
+        match self {
+            Self::Receipt { .. } => HoldingChangeKind::Receipt,
+            Self::Production { .. } => HoldingChangeKind::Production,
+        }
+    }
+    pub fn event_id(&self) -> &str {
+        match self {
+            Self::Receipt { event_id, .. } | Self::Production { event_id, .. } => event_id,
+        }
+    }
+    pub fn recorded_at(&self) -> &str {
+        match self {
+            Self::Receipt { recorded_at, .. } | Self::Production { recorded_at, .. } => recorded_at,
+        }
+    }
+    pub fn seq(&self) -> &str {
+        match self {
+            Self::Receipt { seq, .. } | Self::Production { seq, .. } => seq,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -179,7 +216,7 @@ pub fn validate_holding_input(input: &HoldingInput) -> Result<(), DomainError> {
         return Err(invalid("확인한 수량 0의 보유 가치도 0이어야 합니다"));
     }
     match (basis.kind, &input.observation) {
-        (HoldingBasisKind::Receipt, None) => {}
+        (HoldingBasisKind::Receipt | HoldingBasisKind::Production, None) => {}
         (HoldingBasisKind::Observation, Some(observation)) => {
             valid_id(&observation.id)?;
             sequence(&observation.seq)?;
@@ -273,10 +310,84 @@ pub fn resolve_holding_price(
     ))
 }
 
-/// Reconstruct a view from the exact baseline Q/V and subsequent canonical
-/// receipts. This input is not the already accumulated current holding head.
-/// Older events are historical; the baseline receipt itself is checked and
-/// excluded. A synthetic observation can exercise the same boundary contract.
+fn change_amounts(
+    change: &HoldingChange,
+) -> Result<(Quantity, Money, Quantity, Money), DomainError> {
+    let zero_q = Quantity::from_micros(0)?;
+    let zero_v = Money::from_micros(0)?;
+    match change {
+        HoldingChange::Receipt {
+            quantity, value, ..
+        } => {
+            let q = Quantity::parse(quantity)?;
+            if q.micros() == 0 {
+                return Err(invalid("실입고 수량은 0보다 커야 합니다"));
+            }
+            Ok((zero_q, zero_v, q, Money::parse(value)?))
+        }
+        HoldingChange::Production {
+            production_id,
+            input_quantity,
+            input_value,
+            output_quantity,
+            output_value,
+            ..
+        } => {
+            valid_id(production_id)?;
+            let iq = Quantity::parse(input_quantity)?;
+            let iv = Money::parse(input_value)?;
+            let oq = Quantity::parse(output_quantity)?;
+            let ov = Money::parse(output_value)?;
+            if (iq.micros() == 0 && iv.micros() != 0)
+                || (oq.micros() == 0 && ov.micros() != 0)
+                || (iq.micros() == 0 && oq.micros() == 0)
+            {
+                return Err(invalid(
+                    "생산 변동의 투입·결과 수량과 가치가 일치하지 않습니다",
+                ));
+            }
+            Ok((iq, iv, oq, ov))
+        }
+    }
+}
+
+fn apply_change(
+    current_q: Quantity,
+    current_v: Money,
+    input_q: Quantity,
+    input_v: Money,
+    output_q: Quantity,
+    output_v: Money,
+) -> Result<(Quantity, Money), DomainError> {
+    if input_q.micros() > current_q.micros() || input_v.micros() > current_v.micros() {
+        return Err(invalid("생산 투입이 입력 전 보유 수량·가치를 넘습니다"));
+    }
+    if input_q.micros() > 0 {
+        let expected = crate::domain::round_ratio(
+            i128::from(current_v.micros()) * i128::from(input_q.micros()),
+            i128::from(current_q.micros()),
+        )?;
+        if i128::from(input_v.micros()) != expected {
+            return Err(invalid(
+                "생산 투입 가치가 입력 전 보유 평균 원가와 다릅니다",
+            ));
+        }
+    }
+    let q = (current_q.micros() - input_q.micros())
+        .checked_add(output_q.micros())
+        .ok_or_else(|| invalid("보유 수량 합계가 허용 범위를 넘습니다"))?;
+    let v = (current_v.micros() - input_v.micros())
+        .checked_add(output_v.micros())
+        .ok_or_else(|| invalid("보유 가치 합계가 허용 범위를 넘습니다"))?;
+    if q == 0 && v != 0 {
+        return Err(invalid("확인한 수량 0의 보유 가치도 0이어야 합니다"));
+    }
+    Ok((Quantity::from_micros(q)?, Money::from_micros(v)?))
+}
+
+/// Reconstruct a view from the exact baseline Q/V and subsequent confirmed
+/// receipts and production effects. This is not an accumulated current head.
+/// The event establishing the baseline is checked, then excluded from changes.
 pub fn project_holding(
     baseline: &HoldingInput,
     changes: &[HoldingChange],
@@ -301,36 +412,41 @@ pub fn project_holding(
     let mut ids = HashSet::new();
     let mut applied = false;
     for change in changes {
-        valid_id(&change.event_id)?;
-        timestamp(&change.recorded_at)?;
-        let seq = sequence(&change.seq)?;
-        let q = Quantity::parse(&change.quantity)?;
-        let v = Money::parse(&change.value)?;
-        if seq <= prior_sequence || !ids.insert(&change.event_id) || q.micros() == 0 {
+        valid_id(change.event_id())?;
+        timestamp(change.recorded_at())?;
+        let seq = sequence(change.seq())?;
+        let (input_q, input_v, output_q, output_v) = change_amounts(change)?;
+        if seq <= prior_sequence || !ids.insert(change.event_id()) {
             return Err(invalid("확정 변동의 순서·중복·수량을 확인해 주세요"));
         }
         prior_sequence = seq;
         if baseline
             .basis
             .as_ref()
-            .is_some_and(|b| b.id.as_deref() == Some(change.event_id.as_str()))
+            .is_some_and(|b| b.id.as_deref() == Some(change.event_id()))
             && seq != boundary
         {
             return Err(invalid(
-                "같은 시작 근거를 다른 입고 순서로 다시 적용할 수 없습니다",
+                "같은 시작 근거를 다른 확정 순서로 다시 적용할 수 없습니다",
             ));
         }
         if seq < boundary {
             continue;
         }
         if seq == boundary {
-            if basis.as_ref().is_none_or(|b| {
-                b.kind != HoldingBasisKind::Receipt
-                    || b.id.as_deref() != Some(change.event_id.as_str())
-            }) || quantity != Some(q)
-                || value != Some(v)
+            let kind = match change.kind() {
+                HoldingChangeKind::Receipt => HoldingBasisKind::Receipt,
+                HoldingChangeKind::Production => HoldingBasisKind::Production,
+            };
+            if basis
+                .as_ref()
+                .is_none_or(|b| b.kind != kind || b.id.as_deref() != Some(change.event_id()))
+                || input_q.micros() != 0
+                || input_v.micros() != 0
+                || quantity != Some(output_q)
+                || value != Some(output_v)
             {
-                return Err(invalid("시작 기준과 같은 순서의 입고 근거가 다릅니다"));
+                return Err(invalid("시작 기준과 같은 순서의 확정 근거가 다릅니다"));
             }
             continue;
         }
@@ -339,15 +455,19 @@ pub fn project_holding(
             (Some(q), Some(v)) => (q, v),
             _ => return Err(invalid("기존 보유 수량의 가치를 먼저 확인해 주세요")),
         };
-        let (next_q, next_v) = add_receipt(current_q, current_v, q, v)?;
+        let (next_q, next_v) =
+            apply_change(current_q, current_v, input_q, input_v, output_q, output_v)?;
         quantity = Some(next_q);
         value = Some(next_v);
         applied = true;
         if basis.is_none() {
             basis = Some(HoldingBasisRef {
-                kind: HoldingBasisKind::Receipt,
-                id: Some(change.event_id.clone()),
-                seq: Some(change.seq.clone()),
+                kind: match change.kind() {
+                    HoldingChangeKind::Receipt => HoldingBasisKind::Receipt,
+                    HoldingChangeKind::Production => HoldingBasisKind::Production,
+                },
+                id: Some(change.event_id().into()),
+                seq: Some(change.seq().into()),
             });
         } else {
             subsequent.push(change.clone());
