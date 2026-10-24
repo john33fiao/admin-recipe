@@ -1,4 +1,4 @@
-import { test, expect, type Page } from '@playwright/test'
+import { test, expect, type Page, type BrowserContext } from '@playwright/test'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { once } from 'node:events'
 import { mkdtempSync, cpSync, readFileSync, readdirSync, renameSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
@@ -11,11 +11,16 @@ let directory: string
 let binary: string
 let child: ChildProcess
 let launchUrl: string
+let context: BrowserContext
+const outputs = new WeakMap<ChildProcess, () => string>()
+const exits = new WeakMap<ChildProcess, Promise<[number | null, NodeJS.Signals | null]>>()
 
 async function launch(path = binary) {
   const proc = spawn(path, ['--no-browser'], { cwd: tmpdir(), env: { ...process.env, PATH: '' }, stdio: ['ignore','pipe','pipe'] })
   let output = ''
   let errors = ''
+  exits.set(proc, once(proc, 'close') as Promise<[number | null, NodeJS.Signals | null]>)
+  outputs.set(proc, () => output)
   proc.stderr!.on('data', chunk => { errors += String(chunk) })
   const url = await new Promise<string>((resolve, reject) => {
     const timer = setTimeout(() => { proc.kill(); reject(new Error(`서버 시작 지연: ${errors}`)) }, 10_000)
@@ -29,10 +34,19 @@ async function launch(path = binary) {
   return { proc, url }
 }
 async function stop() {
-  if (!child || child.exitCode !== null) return
-  const exited = once(child, 'exit')
-  child.kill('SIGINT')
-  await exited
+  if (!child) return
+  // Windows kill('SIGINT') is a forced termination. Disconnect the actual
+  // pages and let the unchanged 120-second heartbeat grace stop the app.
+  // Check an already exited child too; close waits for stdout to finish.
+  await Promise.all(context.pages().filter(page => !page.isClosed()).map(page => page.goto('about:blank')))
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const [code, signal] = await Promise.race([
+    exits.get(child)!,
+    new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('normal shutdown timed out')), 180_000) }),
+  ]).finally(() => clearTimeout(timer))
+  expect(code, 'normal shutdown must exit successfully').toBe(0)
+  expect(signal).toBeNull()
+  expect(outputs.get(child)!().includes('순창한상을 안전하게 종료했습니다.')).toBe(true)
 }
 async function open(page: Page) {
   await page.goto(launchUrl)
@@ -46,7 +60,9 @@ async function register(page: Page, name: string, unit = 'g') {
   await expect(page.getByText('재료를 등록했습니다.', { exact:false })).toBeVisible()
 }
 
-test.beforeEach(async () => {
+test.beforeEach(async ({ context: browserContext }) => {
+  test.setTimeout(240_000)
+  context = browserContext
   directory = mkdtempSync(join(tmpdir(), '순창 한상 검증 '))
   binary = join(directory, binaryName)
   cpSync(source, binary)
@@ -54,7 +70,18 @@ test.beforeEach(async () => {
   child = launched.proc
   launchUrl = launched.url
 })
-test.afterEach(async () => { await stop(); rmSync(directory, {recursive:true, force:true}) })
+test.afterEach(async () => {
+  try {
+    await stop()
+  } finally {
+    // A forced cleanup after a timeout must never turn that failed test green.
+    if (child && child.exitCode === null && child.signalCode === null) {
+      child.kill()
+      await exits.get(child)
+    }
+    rmSync(directory, {recursive:true, force:true, maxRetries:5, retryDelay:200})
+  }
+})
 
 test('register, detail reload, restart and stopped data move preserve IDs without runtime PATH', async ({ page }) => {
   await open(page)
@@ -71,6 +98,8 @@ test('register, detail reload, restart and stopped data move preserve IDs withou
   expect(snapshot.materials[0].unit).toBe('장')
   expect(detailPath.endsWith(snapshot.materials[0].id)).toBeTruthy()
   await stop()
+  // Replace only the stopped executable, preserving the complete db directory.
+  cpSync(source, binary)
   const moved = join(directory, '옮긴 폴더')
   mkdirSync(moved)
   cpSync(binary, join(moved, binaryName))
@@ -123,6 +152,18 @@ test('multiple tabs, responsive dark view and explicit API/static errors', async
   await expect(other.getByLabel('재료 이름')).toBeEnabled()
   await page.close()
   await register(other, '가상 복수 탭')
+  const markup = '<img src=x onerror="document.body.dataset.xss=1">'
+  await register(other, markup)
+  await other.getByRole('link', {name:'등록한 재료 보기'}).click()
+  await expect(other.getByRole('heading', {name:markup, exact:true})).toBeVisible()
+  expect(await other.evaluate(() => document.body.dataset.xss)).toBeUndefined()
+  await other.goto(new URL('/', launchUrl).toString())
+  await context.setOffline(true)
+  await other.evaluate(() => window.dispatchEvent(new Event('app:reconnect')))
+  await expect(other.getByLabel('재료 이름')).toBeDisabled()
+  await context.setOffline(false)
+  await other.evaluate(() => window.dispatchEvent(new Event('online')))
+  await expect(other.getByLabel('재료 이름')).toBeEnabled()
   await other.screenshot({path:test.info().outputPath('desktop.png'), fullPage:true})
   await other.setViewportSize({width:390, height:844})
   await other.getByRole('button', {name:'다크 모드로 전환'}).click()

@@ -463,3 +463,67 @@ fn sync_directory(directory: &Path) -> std::io::Result<()> {
     let _ = directory;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sqlite_full_rolls_back_the_request_and_allows_the_same_request_after_recovery() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut store = Store::open(directory.path()).unwrap();
+        let pages: i64 = store
+            .connection
+            .pragma_query_value(None, "page_count", |row| row.get(0))
+            .unwrap();
+        store
+            .connection
+            .pragma_update(None, "max_page_count", pages)
+            .unwrap();
+        let mut failed = None;
+        for index in 0..100 {
+            let input = CreateMaterial {
+                request_id: Uuid::new_v4().to_string(),
+                name: format!("가상 저장 용량 {index} {}", "재".repeat(80)),
+                unit: "g".into(),
+            };
+            let before = store.list().unwrap().len();
+            if let Err(error) = store.create(input.clone()) {
+                assert!(
+                    error.to_string().contains("full"),
+                    "expected SQLITE_FULL, got {error}"
+                );
+                assert_eq!(store.list().unwrap().len(), before);
+                let requests: i64 = store
+                    .connection
+                    .query_row(
+                        "SELECT COUNT(*) FROM creation_requests WHERE request_id = ?1",
+                        [&input.request_id],
+                        |row| row.get(0),
+                    )
+                    .unwrap();
+                assert_eq!(requests, 0);
+                failed = Some(input);
+                break;
+            }
+        }
+        let input = failed.expect("a bounded SQLite page count must exhaust during the fixture");
+        store
+            .connection
+            .pragma_update(None, "max_page_count", 1_000_000)
+            .unwrap();
+        let saved = store.create(input.clone()).unwrap();
+        assert_eq!(store.create(input).unwrap().id, saved.id);
+        let count = store.list().unwrap().len();
+        drop(store);
+        let reopened = Store::open(directory.path()).unwrap();
+        assert_eq!(reopened.list().unwrap().len(), count);
+        assert_eq!(reopened.get(&saved.id).unwrap().unwrap().name, saved.name);
+        assert_eq!(
+            fs::read_dir(directory.path().join("snapshots"))
+                .unwrap()
+                .count(),
+            count
+        );
+    }
+}
