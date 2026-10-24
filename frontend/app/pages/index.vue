@@ -1,34 +1,18 @@
 <script setup lang="ts">
-import type { Material, MaterialInput } from '~/types/material'
-import { apiRequest } from '~/utils/api'
+import type { MaterialInput } from '~/types/material'
 import { formatCreatedAt, normalizeMaterial, validateMaterial } from '~/utils/material'
 
-const connection = useConnection()
-const { name, unit, pending, saving, failure, saved, rejected, save, editRejected } = useMaterialRegistration()
-const materials = ref<Material[]>([])
-const loaded = ref(false)
-const loading = ref(false)
-const loadFailure = ref('')
+const { name, unit, pending, saving, failure, saved, rejected, draftRestored, draftFailure, save, editRejected } = useMaterialRegistration()
+const { materials, loaded, loading, loadFailure, available, loadMaterials } = useMaterials()
 const errors = ref<Partial<Record<keyof MaterialInput, string>>>({})
 const nameInput = ref<HTMLInputElement | null>(null)
 const unitInput = ref<HTMLInputElement | null>(null)
-const available = computed(() => connection.value === 'connected')
 
-async function loadMaterials() {
-  if (!available.value || loading.value) return
-  loading.value = true
-  loadFailure.value = ''
-  try {
-    materials.value = await apiRequest<Material[]>('/api/materials')
-    loaded.value = true
-  } catch {
-    loadFailure.value = '재료 목록을 불러오지 못했습니다. 연결을 확인한 뒤 다시 불러와 주세요.'
-  } finally {
-    loading.value = false
-  }
+async function editInput() {
+  editRejected()
+  await nextTick()
+  nameInput.value?.focus()
 }
-
-watch(available, (connected) => { if (connected) void loadMaterials() }, { immediate: true })
 
 async function submit() {
   if (!available.value || saving.value) return
@@ -56,6 +40,8 @@ useHead({ title: '재료 관리 | 순창한상' })
   <div class="workspace-grid">
     <section class="registration-panel" aria-labelledby="register-title">
       <div class="section-heading"><h2 id="register-title">새 재료 등록</h2><p>이름과 단위부터 차근차근.</p></div>
+      <p v-if="draftRestored && !pending" class="draft-note" role="status">이 탭에서 작성하던 내용을 불러왔습니다.</p>
+      <p v-if="draftFailure" class="notice warning" role="alert">{{ draftFailure }}</p>
       <form novalidate :aria-busy="saving" @submit.prevent="submit">
         <div class="field">
           <label for="material-name">재료 이름 <span class="required-label">필수</span></label>
@@ -72,12 +58,13 @@ useHead({ title: '재료 관리 | 순창한상' })
         <div v-if="pending && !failure && !saving" class="notice warning" role="status">완료를 확인하지 못한 등록이 있습니다. 같은 내용으로 재시도하면 중복으로 등록되지 않습니다.</div>
         <div v-if="failure" class="notice warning" role="alert">
           <p>{{ failure }}</p>
-          <button v-if="rejected" class="text-button" type="button" @click="editRejected">입력 내용 수정</button>
+          <button v-if="rejected" class="text-button" type="button" @click="editInput">입력 내용 수정</button>
         </div>
         <button class="primary-button" type="submit" :disabled="!available || saving || rejected">
           {{ saving ? '등록 확인 중…' : pending ? '같은 요청 재시도' : '재료 등록' }}
         </button>
         <p v-if="!available" class="field-hint">앱에 연결되면 등록할 수 있습니다.</p>
+        <p class="field-hint">작성 중인 내용은 이 탭에서 보관합니다. 재료 등록 전에는 저장된 재료에 포함되지 않습니다.</p>
       </form>
       <div v-if="saved" class="notice success" role="status">
         <p><strong>{{ saved.name }}</strong> 재료를 등록했습니다.</p>

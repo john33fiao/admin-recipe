@@ -18,7 +18,7 @@ T-002는 계산·데이터 계약, T-020은 공통 UI 기반으로 서로 독립
 | --- | --- | --- |
 | [T-001: Rust·Nuxt 휴대 실행 검증과 첫 저장 흐름](T-001-portable-local-app.md) | 진행 중 — 실환경 미검증 유지 | 없음 |
 | [T-002: 수량·원가와 소모 보정 계산 계약](T-002-domain-contract.md) | 1차 · 설계 완료 — 독립 검토 통과 | 없음 |
-| [T-003: 재료·상태·단위와 사전 가격 관리](T-003-materials-and-units.md) | 1차 · 대기 | [T-002](T-002-domain-contract.md), [T-020](T-020-ui-foundation.md) |
+| [T-003: 재료·상태·단위와 사전 가격 관리](T-003-materials-and-units.md) | 1차 · 착수 가능 | [T-002](T-002-domain-contract.md), [T-020](T-020-ui-foundation.md) |
 | [T-004: 레시피·메뉴 복제와 사전 원가 계산](T-004-recipes-and-costs.md) | 1차 · 대기 | [T-003](T-003-materials-and-units.md), [T-005](T-005-business-history.md) |
 | [T-005: 업무 기록·임시 저장·확정과 JSON 기록 확장](T-005-business-history.md) | 1차 · 대기 | [T-002](T-002-domain-contract.md), [T-003](T-003-materials-and-units.md) |
 | [T-006: 발주 내역과 미입고 주문량](T-006-purchase-orders.md) | 1차 · 대기 | [T-003](T-003-materials-and-units.md), [T-005](T-005-business-history.md) |
@@ -35,7 +35,7 @@ T-002는 계산·데이터 계약, T-020은 공통 UI 기반으로 서로 독립
 | [T-017: 발주·입고·마지막 실사 중심 운영 개요](T-017-operations-overview.md) | 1차 · 대기 | [T-006](T-006-purchase-orders.md), [T-007](T-007-receipts.md), [T-015](T-015-photos-and-suppliers.md), [T-016](T-016-statistics-and-history.md) |
 | [T-018: 사진과 버전 이력을 포함한 전체 상태 복원](T-018-full-state-restore.md) | 1차 · 대기 | [T-014](T-014-closing-workspace.md), [T-015](T-015-photos-and-suppliers.md) |
 | [T-019: 이전 DB·JSON 호환과 같은 OS 데이터 이동](T-019-data-compatibility.md) | 1차 · 대기 | [T-018](T-018-full-state-restore.md) |
-| [T-020: 공통 탐색·입력 상태·라이트/다크와 반응형 UI](T-020-ui-foundation.md) | 1차 · 착수 가능 | 없음 |
+| [T-020: 공통 탐색·입력 상태·라이트/다크와 반응형 UI](T-020-ui-foundation.md) | 1차 · 완료 — 구현·회귀 검증 통과 | 없음 |
 | [T-021: 1차 업무 통합·복구·배포 준비 검증](T-021-first-release-verification.md) | 1차 · 대기 — 최종 완료에는 T-001 필수 검증 필요 | [T-017](T-017-operations-overview.md), [T-019](T-019-data-compatibility.md) |
 | [T-022: 2차 내일 메뉴·공유 재료 계획 요구 구체화](T-022-next-day-menu-plan.md) | 2차 · 구체화/착수 대기 | [T-021](T-021-first-release-verification.md) |
 | [T-023: 2차 실제 작업시간 기록과 시계열](T-023-work-time-history.md) | 2차 · 구체화/착수 대기 | [T-021](T-021-first-release-verification.md) |

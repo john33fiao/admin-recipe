@@ -1,20 +1,38 @@
 import type { Material, PendingMaterial } from '~/types/material'
 import { ApiError, apiRequest } from '~/utils/api'
 import { prepareRequest, restorePending } from '~/utils/material'
+import { restoreMaterialDraft } from '~/utils/draft'
 
 const storageKey = 'sunchang.pending-material.v1'
+const draftStorageKey = 'sunchang.draft-material.v1'
 
 export function useMaterialRegistration() {
   const connection = useConnection()
   const pending = useState<PendingMaterial | null>('pending-material', () => {
     try { return restorePending(sessionStorage.getItem(storageKey)) } catch { return null }
   })
-  const name = useState('material-name', () => pending.value?.name ?? '')
-  const unit = useState('material-unit', () => pending.value?.unit ?? 'g')
+  const draft = useState('material-draft', () => {
+    try { return restoreMaterialDraft(sessionStorage.getItem(draftStorageKey)) } catch { return null }
+  })
+  const name = useState('material-name', () => pending.value?.name ?? draft.value?.name ?? '')
+  const unit = useState('material-unit', () => pending.value?.unit ?? draft.value?.unit ?? 'g')
+  const draftRestored = useState('material-draft-restored', () => !pending.value && !!draft.value)
+  const draftFailure = useState('material-draft-failure', () => '')
   const saving = useState('material-saving', () => false)
   const failure = useState('material-failure', () => '')
   const rejected = useState('material-rejected', () => false)
   const saved = useState<Material | null>('material-saved', () => null)
+
+  watch([name, unit], ([currentName, currentUnit]) => {
+    if (pending.value) return
+    try {
+      if (currentName === '' && currentUnit === 'g') sessionStorage.removeItem(draftStorageKey)
+      else sessionStorage.setItem(draftStorageKey, JSON.stringify({ name: currentName, unit: currentUnit }))
+      draftFailure.value = ''
+    } catch {
+      draftFailure.value = '입력 내용을 이 탭에 보관하지 못했습니다. 새로고침하면 사라질 수 있습니다.'
+    }
+  }, { flush: 'sync' })
 
   async function save(): Promise<Material | null> {
     if (saving.value || connection.value !== 'connected') return null
@@ -39,10 +57,17 @@ export function useMaterialRegistration() {
       const material = await apiRequest<Material>('/api/materials', request)
       // A success response means the server has completed both data and change-log writes.
       saved.value = material
-      pending.value = null
+      // This request can finish after the form unmounts and its watchers stop.
+      // Clear the draft before the immutable key so failed cleanup stays safe to replay.
+      try {
+        sessionStorage.removeItem(draftStorageKey)
+        sessionStorage.removeItem(storageKey)
+      } catch { /* Replaying the persisted request key remains safe. */ }
+      draftRestored.value = false
+      draftFailure.value = ''
       name.value = ''
       unit.value = 'g'
-      try { sessionStorage.removeItem(storageKey) } catch { /* Replaying the same key remains safe. */ }
+      pending.value = null
       return material
     } catch (error) {
       if (error instanceof ApiError && [400, 409].includes(error.status)) {
@@ -67,5 +92,5 @@ export function useMaterialRegistration() {
     failure.value = ''
   }
 
-  return { name, unit, pending, saving, failure, saved, rejected, save, editRejected }
+  return { name, unit, pending, saving, failure, saved, rejected, draftRestored, draftFailure, save, editRejected }
 }

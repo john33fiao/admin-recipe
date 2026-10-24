@@ -138,6 +138,47 @@ async fn missing_api_and_assets_do_not_become_spa_successes() {
 }
 
 #[tokio::test]
+async fn overview_get_and_head_serve_the_app_without_expanding_fallback_paths() {
+    let (_dir, app, _) = app();
+    for method in ["GET", "HEAD"] {
+        let response = app
+            .clone()
+            .oneshot(req(method, "/overview", "").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "{method}");
+        assert!(
+            response.headers()["content-type"]
+                .to_str()
+                .unwrap()
+                .starts_with("text/html")
+        );
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        assert_eq!(body.is_empty(), method == "HEAD");
+        for path in ["/overview/missing", "/api/missing", "/_nuxt/missing.js"] {
+            let response = app
+                .clone()
+                .oneshot(
+                    req(method, path, "")
+                        .header("cookie", "hansang_4321=test-secret")
+                        .header("origin", "http://127.0.0.1:4321")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::NOT_FOUND, "{method} {path}");
+            assert!(
+                !response.headers()["content-type"]
+                    .to_str()
+                    .unwrap()
+                    .starts_with("text/html")
+            );
+        }
+    }
+}
+
+#[tokio::test]
 async fn session_and_writes_require_exact_origin_even_with_a_valid_cookie() {
     let (_dir, app, _) = app();
     for origin in [

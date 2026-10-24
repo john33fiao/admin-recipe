@@ -1,5 +1,11 @@
 <script setup lang="ts">
 const dark = ref(false)
+const route = useRoute()
+watch(() => route.path, async () => {
+  await nextTick()
+  document.getElementById('main-content')?.focus({ preventScroll: true })
+  window.scrollTo(0, 0)
+})
 onMounted(() => {
   let preference: string | null = null
   try { preference = localStorage.getItem('sunchang.theme') } catch { /* Use system appearance. */ }
@@ -30,6 +36,10 @@ function toggleTheme() {
         <span>{{ dark ? '밝게' : '어둡게' }}</span>
       </button>
     </header>
+    <nav class="app-navigation" aria-label="주요 메뉴">
+      <NuxtLink to="/overview" :aria-current="route.path === '/overview' ? 'page' : undefined">작업 시작</NuxtLink>
+      <NuxtLink to="/" :aria-current="route.path === '/' || route.path.startsWith('/materials/') ? 'page' : undefined">재료 관리</NuxtLink>
+    </nav>
     <ConnectionBanner />
     <main id="main-content" tabindex="-1"><NuxtPage /></main>
     <footer class="app-footer"><span>순창한상</span><span>이 PC의 앱에서 재료를 관리합니다.</span></footer>
