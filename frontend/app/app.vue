@@ -39,6 +39,7 @@ function toggleTheme() {
     <nav class="app-navigation" aria-label="주요 메뉴">
       <NuxtLink to="/overview" :aria-current="route.path === '/overview' ? 'page' : undefined">작업 시작</NuxtLink>
       <NuxtLink to="/" :aria-current="route.path === '/' || route.path.startsWith('/materials/') ? 'page' : undefined">재료 관리</NuxtLink>
+      <NuxtLink to="/business" :aria-current="route.path === '/business' || route.path.startsWith('/business/') ? 'page' : undefined">업무 기록</NuxtLink>
     </nav>
     <ConnectionBanner />
     <main id="main-content" tabindex="-1"><NuxtPage /></main>

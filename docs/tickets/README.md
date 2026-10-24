@@ -20,7 +20,7 @@ T-002는 계산·데이터 계약, T-020은 공통 UI 기반으로 서로 독립
 | [T-002: 수량·원가와 소모 보정 계산 계약](T-002-domain-contract.md) | 1차 · 설계 완료 — 독립 검토 통과 | 없음 |
 | [T-003: 재료·상태·단위와 사전 가격 관리](T-003-materials-and-units.md) | 1차 · 완료 — 재료/사전 가격 검증, 보유 원장 연결은 T-007 | [T-002](T-002-domain-contract.md), [T-020](T-020-ui-foundation.md) |
 | [T-004: 레시피·메뉴 복제와 사전 원가 계산](T-004-recipes-and-costs.md) | 1차 · 대기 | [T-003](T-003-materials-and-units.md), [T-005](T-005-business-history.md) |
-| [T-005: 업무 기록·임시 저장·확정과 JSON 기록 확장](T-005-business-history.md) | 1차 · 대기 | [T-002](T-002-domain-contract.md), [T-003](T-003-materials-and-units.md) |
+| [T-005: 업무 기록·임시 저장·확정과 JSON 기록 확장](T-005-business-history.md) | 1차 · 공통 기반 검증 완료 · 판매 통합 T-009 대기 | [T-002](T-002-domain-contract.md), [T-003](T-003-materials-and-units.md) |
 | [T-006: 발주 내역과 미입고 주문량](T-006-purchase-orders.md) | 1차 · 대기 | [T-003](T-003-materials-and-units.md), [T-005](T-005-business-history.md) |
 | [T-007: 실측 입고와 보유 평균 원가](T-007-receipts.md) | 1차 · 대기 | [T-006](T-006-purchase-orders.md) |
 | [T-008: 실측 손질·비축 생산과 원가 이월](T-008-production.md) | 1차 · 대기 | [T-004](T-004-recipes-and-costs.md), [T-007](T-007-receipts.md) |

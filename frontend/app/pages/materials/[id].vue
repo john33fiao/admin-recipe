@@ -57,6 +57,7 @@ useHead({ title: computed(() => `${material.value?.name ?? '재료 상세'} | �
   </section>
   <template v-if="material">
     <MaterialEditor :key="material.id" :material="material" :refresh="load" />
+    <p class="business-entry"><NuxtLink class="secondary-link" :to="{ path: '/business', query: { material: material.id } }">가격 초안 작성</NuxtLink><span>가격 입력을 임시 저장하고 나중에 확인한 뒤 확정할 수 있습니다.</span></p>
     <section class="history-section" aria-labelledby="price-history-title">
       <h2 id="price-history-title">가격 변경 이력</h2>
       <p v-if="!material.prices.length" class="stale-note">등록한 가격이 없습니다. 0원과 가격 없음은 구분합니다.</p>

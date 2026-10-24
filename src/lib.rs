@@ -1,3 +1,4 @@
+pub mod business;
 pub mod catalog;
 pub mod domain;
 pub mod lifecycle;

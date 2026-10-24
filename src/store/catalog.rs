@@ -1,27 +1,25 @@
 use super::{
-    CreateMaterial, Material, SCHEMA_VERSION, Store, StoreError, read_materials, unavailable,
-    validate_input,
+    CreateMaterial, Material, Store, StoreError, read_materials, unavailable, validate_input,
 };
 use crate::{
     catalog::*,
     domain::{HoldingBasis, Money, Quantity, Unit, UnitPrice, resolve_price},
 };
-use chrono::{SecondsFormat, Utc};
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
-use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use serde::{Serialize, de::DeserializeOwned};
 use uuid::Uuid;
 
 fn validation(error: impl std::fmt::Display) -> StoreError {
     StoreError::Validation(error.to_string())
 }
 
-fn uuid(value: &str, label: &str) -> Result<String, StoreError> {
+pub(super) fn uuid(value: &str, label: &str) -> Result<String, StoreError> {
     Uuid::parse_str(value)
         .map(|id| id.to_string())
         .map_err(|_| validation(format!("{label}가 올바른 UUID가 아닙니다")))
 }
 
-fn normalize_meta(meta: &mut MutationMeta) -> Result<(), StoreError> {
+pub(super) fn normalize_meta(meta: &mut MutationMeta) -> Result<(), StoreError> {
     meta.request_id = uuid(&meta.request_id, "요청 ID")?;
     meta.epoch = uuid(&meta.epoch, "상태 세대")?;
     let revision = meta
@@ -73,7 +71,7 @@ fn normalize_fields(
     Ok(())
 }
 
-fn state(connection: &Connection) -> Result<CatalogState, StoreError> {
+pub(super) fn state(connection: &Connection) -> Result<CatalogState, StoreError> {
     connection
         .query_row(
             "SELECT epoch, revision FROM catalog_state WHERE singleton=1",
@@ -107,7 +105,10 @@ fn version_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<MaterialVersion> {
 
 const VERSION_COLUMNS: &str = "v.id,v.material_id,v.name,v.unit,v.canonical_unit,v.dimension,v.kind,v.description,v.archived,v.recorded_at,v.sequence,v.source";
 
-fn versions(connection: &Connection, id: Option<&str>) -> Result<Vec<MaterialVersion>, StoreError> {
+pub(super) fn versions(
+    connection: &Connection,
+    id: Option<&str>,
+) -> Result<Vec<MaterialVersion>, StoreError> {
     let sql = format!(
         "SELECT {VERSION_COLUMNS} FROM material_versions v WHERE (?1 IS NULL OR v.material_id=?1) ORDER BY v.sequence IS NOT NULL,v.sequence,v.recorded_at,v.id"
     );
@@ -120,14 +121,14 @@ fn versions(connection: &Connection, id: Option<&str>) -> Result<Vec<MaterialVer
         .map_err(unavailable)
 }
 
-fn current_version(
+pub(super) fn current_version(
     connection: &Connection,
     id: &str,
 ) -> Result<Option<MaterialVersion>, StoreError> {
     connection.query_row(&format!("SELECT {VERSION_COLUMNS} FROM material_versions v JOIN material_heads h ON h.current_version_id=v.id AND h.material_id=v.material_id WHERE h.material_id=?1"), [id], version_row).optional().map_err(unavailable)
 }
 
-fn prices(
+pub(super) fn prices(
     connection: &Connection,
     id: Option<&str>,
 ) -> Result<Vec<MaterialPriceVersion>, StoreError> {
@@ -275,6 +276,65 @@ fn insert_material(
     };
     insert_version(connection, &version)?;
     summary(connection, version)
+}
+
+pub(super) struct PriceInput<'a> {
+    pub material_id: &'a str,
+    pub expected_version_id: &'a str,
+    pub quantity: &'a str,
+    pub unit: &'a str,
+    pub amount: &'a str,
+}
+
+pub(super) fn apply_catalog_price(
+    connection: &Connection,
+    input: PriceInput<'_>,
+    seq: i64,
+    time: &str,
+) -> Result<MaterialPriceVersion, StoreError> {
+    let version = required_version(connection, input.material_id, input.expected_version_id)?;
+    let unit = Unit::parse(input.unit).map_err(validation)?;
+    let quantity = Quantity::parse(input.quantity).map_err(validation)?;
+    let amount = Money::parse(input.amount).map_err(validation)?;
+    if quantity.micros() == 0 {
+        return Err(validation("가격 기준 수량은 0보다 커야 합니다"));
+    }
+    if !unit.same_dimension(&Unit::parse(&version.unit).map_err(unavailable)?) {
+        return Err(validation("가격 수량은 재료와 같은 차원 단위를 사용하세요"));
+    }
+    let canonical_quantity = unit.to_canonical(quantity).map_err(validation)?;
+    let price = MaterialPriceVersion {
+        id: Uuid::new_v4().to_string(),
+        material_id: input.material_id.into(),
+        material_version_id: version.id,
+        quantity: canonical_quantity.decimal(),
+        amount: amount.decimal(),
+        unit: unit.canonical().into(),
+        input_quantity: quantity.decimal(),
+        input_unit: input.unit.into(),
+        recorded_at: time.into(),
+        seq: seq.to_string(),
+    };
+    connection
+        .execute(
+            "INSERT INTO material_prices(id,material_id,material_version_id,quantity_micros,
+         amount_micros,unit,input_quantity,input_unit,recorded_at,sequence)
+         VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
+            params![
+                price.id,
+                price.material_id,
+                price.material_version_id,
+                canonical_quantity.micros(),
+                amount.micros(),
+                price.unit,
+                price.input_quantity,
+                price.input_unit,
+                price.recorded_at,
+                seq
+            ],
+        )
+        .map_err(unavailable)?;
+    Ok(price)
 }
 
 impl Store {
@@ -448,7 +508,7 @@ impl Store {
         input.amount = amount.decimal();
         input.unit = input.unit.trim().to_owned();
         let unit = Unit::parse(&input.unit).map_err(validation)?;
-        let canonical_quantity = unit.to_canonical(quantity).map_err(validation)?;
+        unit.to_canonical(quantity).map_err(validation)?;
         let payload = serde_json::to_string(&(id.clone(), &input)).map_err(unavailable)?;
         let meta = input.meta.clone();
         self.catalog_mutate(
@@ -457,33 +517,18 @@ impl Store {
             "material.price",
             &payload,
             move |tx, seq, time| {
-                let version = required_version(tx, &id, &input.expected_version_id)?;
-                if !unit.same_dimension(&Unit::parse(&version.unit).map_err(unavailable)?) {
-                    return Err(validation("가격 수량은 재료와 같은 차원 단위를 사용하세요"));
-                }
-                let price = MaterialPriceVersion {
-                    id: Uuid::new_v4().to_string(),
-                    material_id: id,
-                    material_version_id: version.id,
-                    quantity: canonical_quantity.decimal(),
-                    amount: amount.decimal(),
-                    unit: unit.canonical().into(),
-                    input_quantity: input.quantity,
-                    input_unit: input.unit,
-                    recorded_at: time.into(),
-                    seq: seq.to_string(),
-                };
-                tx.execute(
-                    "INSERT INTO material_prices(id,material_id,material_version_id,quantity_micros,
-                     amount_micros,unit,input_quantity,input_unit,recorded_at,sequence)
-                     VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
-                    params![
-                        price.id, price.material_id, price.material_version_id,
-                        canonical_quantity.micros(), amount.micros(), price.unit,
-                        price.input_quantity, price.input_unit, price.recorded_at, seq,
-                    ],
-                ).map_err(unavailable)?;
-                Ok(price)
+                apply_catalog_price(
+                    tx,
+                    PriceInput {
+                        material_id: &id,
+                        expected_version_id: &input.expected_version_id,
+                        quantity: &input.quantity,
+                        unit: &input.unit,
+                        amount: &input.amount,
+                    },
+                    seq,
+                    time,
+                )
             },
         )
     }
@@ -557,202 +602,20 @@ impl Store {
         payload: &str,
         apply: impl FnOnce(&Transaction<'_>, i64, &str) -> Result<T, StoreError>,
     ) -> Result<CatalogMutation<T>, StoreError> {
-        let prior: Option<(String, String, String)> = self
-            .connection
-            .query_row(
-                "SELECT operation,payload,response FROM mutation_requests WHERE request_id=?1",
-                [request_id],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
-            )
-            .optional()
-            .map_err(unavailable)?;
-        if let Some((old_operation, old_payload, response)) = prior {
-            if old_operation != operation || old_payload != payload {
-                return Err(StoreError::Conflict(
-                    "같은 요청 ID에 다른 입력을 사용할 수 없습니다".into(),
-                ));
-            }
-            self.recover()?;
-            return serde_json::from_str(&response).map_err(unavailable);
-        }
-        let legacy: bool = self
-            .connection
-            .query_row(
-                "SELECT EXISTS(SELECT 1 FROM creation_requests WHERE request_id=?1)",
-                [request_id],
-                |r| r.get(0),
-            )
-            .map_err(unavailable)?;
-        if legacy {
-            return Err(StoreError::Conflict(
-                "기존 등록 요청 ID를 새 명령에 사용할 수 없습니다".into(),
-            ));
-        }
-        self.recover()?;
-        let tx = self.connection.transaction().map_err(unavailable)?;
-        let current = state(&tx)?;
-        if meta.is_some_and(|m| m.epoch != current.epoch || m.expected_revision != current.revision)
-        {
-            return Err(StoreError::StaleState(
-                "자료가 변경되었습니다. 최신 상태를 확인한 뒤 다시 저장하세요".into(),
-            ));
-        }
-        tx.execute(
-            "INSERT INTO snapshot_outbox(payload,published) VALUES('',0)",
-            [],
-        )
-        .map_err(unavailable)?;
-        let sequence = tx.last_insert_rowid();
-        let recorded_at = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
-        let value = apply(&tx, sequence, &recorded_at)?;
-        tx.execute(
-            "UPDATE catalog_state SET revision=?1 WHERE singleton=1",
-            [sequence],
-        )
-        .map_err(unavailable)?;
-        let response = CatalogMutation {
-            value,
-            state: CatalogState {
-                epoch: current.epoch,
-                revision: sequence.to_string(),
+        self.mutate(
+            meta,
+            request_id,
+            operation,
+            payload,
+            |tx, seq, time, state| {
+                Ok(CatalogMutation {
+                    value: apply(tx, seq, time)?,
+                    state: state.clone(),
+                })
             },
-        };
-        let response_json = serde_json::to_string(&response).map_err(unavailable)?;
-        tx.execute(
-            "INSERT INTO mutation_requests(request_id,operation,payload,response,epoch,sequence)
-             VALUES(?1,?2,?3,?4,?5,?6)",
-            params![
-                request_id,
-                operation,
-                payload,
-                response_json,
-                response.state.epoch,
-                sequence
-            ],
         )
-        .map_err(unavailable)?;
-        let snapshot = SnapshotV2 {
-            format_version: 2,
-            schema_version: SCHEMA_VERSION,
-            sequence: sequence.to_string(),
-            request_id: request_id.into(),
-            recorded_at,
-            state: read_snapshot_state(&tx)?,
-        };
-        let snapshot_json = serde_json::to_string_pretty(&snapshot).map_err(unavailable)? + "\n";
-        tx.execute(
-            "UPDATE snapshot_outbox SET payload=?1 WHERE sequence=?2",
-            params![snapshot_json, sequence],
-        )
-        .map_err(unavailable)?;
-        tx.commit().map_err(unavailable)?;
-        self.recover().map_err(|error|StoreError::Unavailable(format!("자료는 DB에 저장되었지만 JSON 기록을 완료하지 못했습니다. 같은 요청으로 다시 시도하세요: {error}")))?;
-        Ok(response)
     }
 }
-
-#[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(super) struct SnapshotV2 {
-    pub format_version: u32,
-    pub schema_version: i64,
-    pub sequence: String,
-    pub request_id: String,
-    pub recorded_at: String,
-    state: SnapshotState,
-}
-#[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct SnapshotState {
-    materials: Vec<Material>,
-    material_versions: Vec<MaterialVersion>,
-    material_heads: Vec<Head>,
-    material_prices: Vec<MaterialPriceVersion>,
-    catalog_state: CatalogState,
-    creation_requests: Vec<LegacyRequest>,
-    mutation_requests: Vec<MutationRecord>,
-}
-#[derive(Serialize, Deserialize)]
-struct Head {
-    material_id: String,
-    current_version_id: String,
-}
-#[derive(Serialize, Deserialize)]
-struct LegacyRequest {
-    request_id: String,
-    name: String,
-    unit: String,
-    material_id: String,
-}
-#[derive(Serialize, Deserialize)]
-struct MutationRecord {
-    request_id: String,
-    operation: String,
-    payload: String,
-    response: String,
-    epoch: String,
-    sequence: String,
-}
-
-fn read_snapshot_state(connection: &Connection) -> Result<SnapshotState, StoreError> {
-    let heads = connection
-        .prepare("SELECT material_id,current_version_id FROM material_heads ORDER BY material_id")
-        .map_err(unavailable)?
-        .query_map([], |r| {
-            Ok(Head {
-                material_id: r.get(0)?,
-                current_version_id: r.get(1)?,
-            })
-        })
-        .map_err(unavailable)?
-        .collect::<rusqlite::Result<_>>()
-        .map_err(unavailable)?;
-    let legacy = connection
-        .prepare(
-            "SELECT request_id,name,unit,material_id FROM creation_requests ORDER BY request_id",
-        )
-        .map_err(unavailable)?
-        .query_map([], |r| {
-            Ok(LegacyRequest {
-                request_id: r.get(0)?,
-                name: r.get(1)?,
-                unit: r.get(2)?,
-                material_id: r.get(3)?,
-            })
-        })
-        .map_err(unavailable)?
-        .collect::<rusqlite::Result<_>>()
-        .map_err(unavailable)?;
-    let requests = connection
-        .prepare(
-            "SELECT request_id,operation,payload,response,epoch,sequence
-                  FROM mutation_requests ORDER BY sequence,request_id",
-        )
-        .map_err(unavailable)?
-        .query_map([], |row| {
-            Ok(MutationRecord {
-                request_id: row.get(0)?,
-                operation: row.get(1)?,
-                payload: row.get(2)?,
-                response: row.get(3)?,
-                epoch: row.get(4)?,
-                sequence: row.get::<_, i64>(5)?.to_string(),
-            })
-        })
-        .map_err(unavailable)?
-        .collect::<rusqlite::Result<_>>()
-        .map_err(unavailable)?;
-    Ok(SnapshotState {
-        materials: read_materials(connection).map_err(unavailable)?,
-        material_versions: versions(connection, None)?,
-        material_heads: heads,
-        material_prices: prices(connection, None)?,
-        catalog_state: state(connection)?,
-        creation_requests: legacy,
-        mutation_requests: requests,
-    })
-}
-
 pub(super) fn migrate_catalog(connection: &Connection) -> anyhow::Result<()> {
     connection.execute_batch("CREATE TABLE material_versions(
         id TEXT PRIMARY KEY NOT NULL,material_id TEXT NOT NULL REFERENCES materials(id),name TEXT NOT NULL CHECK(length(name) BETWEEN 1 AND 100),unit TEXT NOT NULL CHECK(length(unit) BETWEEN 1 AND 20),canonical_unit TEXT NOT NULL,dimension TEXT NOT NULL CHECK(dimension IN('mass','volume','custom')),kind TEXT NOT NULL CHECK(kind IN('raw','prepared','stocked','menu','unclassified')),description TEXT NOT NULL,archived INTEGER NOT NULL CHECK(archived IN(0,1)),recorded_at TEXT NOT NULL,sequence INTEGER REFERENCES snapshot_outbox(sequence),source TEXT NOT NULL,UNIQUE(material_id,id));

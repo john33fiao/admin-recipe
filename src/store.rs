@@ -11,9 +11,12 @@ use std::{
 use tempfile::NamedTempFile;
 use uuid::Uuid;
 
+mod business;
 mod catalog;
+mod mutation;
+mod snapshot;
 
-const SCHEMA_VERSION: i64 = 3;
+const SCHEMA_VERSION: i64 = 4;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Material {
@@ -61,6 +64,7 @@ pub struct Store {
 }
 
 #[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Snapshot {
     format_version: u32,
     schema_version: i64,
@@ -179,24 +183,7 @@ impl Store {
                     |row| row.get(0),
                 )
                 .map_err(unavailable)?;
-            let header: serde_json::Value = serde_json::from_str(&payload).map_err(unavailable)?;
-            let supported = match header.get("format_version").and_then(|v| v.as_u64()) {
-                Some(1) => {
-                    let snapshot: Snapshot = serde_json::from_str(&payload).map_err(unavailable)?;
-                    (1..=2).contains(&snapshot.schema_version) && snapshot.sequence == sequence
-                }
-                Some(2) => {
-                    let snapshot: catalog::SnapshotV2 =
-                        serde_json::from_str(&payload).map_err(unavailable)?;
-                    snapshot.schema_version == 3 && snapshot.sequence == sequence.to_string()
-                }
-                _ => false,
-            };
-            if !supported {
-                return Err(StoreError::Unavailable(
-                    "지원하지 않거나 손상된 JSON 변경 기록입니다".into(),
-                ));
-            }
+            snapshot::validate(&payload, sequence)?;
             publish_snapshot(&self.root.join("snapshots"), sequence, payload.as_bytes())
                 .map_err(unavailable)?;
             if !published {
@@ -308,6 +295,7 @@ fn validate_schema(connection: &Connection) -> anyhow::Result<()> {
     connection
         .prepare("SELECT request_id, name, unit, material_id FROM creation_requests LIMIT 0")?;
     catalog::validate_catalog_schema(connection)?;
+    business::validate_business_schema(connection)?;
     let violation: Option<String> = connection
         .query_row("PRAGMA foreign_key_check", [], |row| row.get(0))
         .optional()?;
@@ -369,6 +357,10 @@ fn migrate(connection: &mut Connection, starting_version: i64) -> anyhow::Result
     }
     if version == 2 {
         catalog::migrate_catalog(&transaction)?;
+        version = 3;
+    }
+    if version == 3 {
+        business::migrate_business(&transaction)?;
     }
     validate_schema(&transaction)?;
     transaction.commit()?;

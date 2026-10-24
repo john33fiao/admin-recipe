@@ -1,4 +1,8 @@
 use crate::{
+    business::{
+        ArchiveBusiness, BusinessFilter, ConfirmBusiness, CreateBusinessDraft, PreviewBusiness,
+        ReviseBusinessDraft,
+    },
     catalog::{
         ArchiveCatalogMaterial, CatalogFilter, CreateCatalogMaterial, CreateCatalogPrice,
         ReviseCatalogMaterial,
@@ -164,7 +168,7 @@ fn error(status: StatusCode, message: &str) -> Response {
     ApiError(status, message.into(), code).into_response()
 }
 
-fn catalog_input<T>(input: Result<Json<T>, JsonRejection>) -> Result<T, ApiError> {
+fn json_input<T>(input: Result<Json<T>, JsonRejection>) -> Result<T, ApiError> {
     input.map(|Json(value)| value).map_err(|error| {
         let status = if error.status() == StatusCode::PAYLOAD_TOO_LARGE {
             StatusCode::PAYLOAD_TOO_LARGE
@@ -188,6 +192,13 @@ pub fn router(state: AppState) -> Router {
         .route("/api/materials/{id}/versions", post(revise))
         .route("/api/materials/{id}/archive", post(archive))
         .route("/api/materials/{id}/prices", post(add_price))
+        .route("/api/business", get(business_list))
+        .route("/api/business/drafts", post(business_create))
+        .route("/api/business/{id}", get(business_detail))
+        .route("/api/business/{id}/draft-revisions", post(business_revise))
+        .route("/api/business/{id}/preview", post(business_preview))
+        .route("/api/business/{id}/confirm", post(business_confirm))
+        .route("/api/business/{id}/archive", post(business_archive))
         .route("/api/heartbeat", get(heartbeat))
         .fallback(static_asset)
         .layer(DefaultBodyLimit::max(16 * 1024))
@@ -298,7 +309,7 @@ async fn create(
     State(state): State<AppState>,
     input: Result<Json<Value>, JsonRejection>,
 ) -> Result<Response, ApiError> {
-    let input = catalog_input(input)?;
+    let input = json_input(input)?;
     let object = input.as_object().ok_or_else(|| {
         ApiError(
             StatusCode::BAD_REQUEST,
@@ -333,7 +344,7 @@ async fn revise(
     Path(id): Path<String>,
     input: Result<Json<ReviseCatalogMaterial>, JsonRejection>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let input = catalog_input(input)?;
+    let input = json_input(input)?;
     Ok((
         StatusCode::CREATED,
         Json(
@@ -348,7 +359,7 @@ async fn archive(
     Path(id): Path<String>,
     input: Result<Json<ArchiveCatalogMaterial>, JsonRejection>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let input = catalog_input(input)?;
+    let input = json_input(input)?;
     Ok((
         StatusCode::CREATED,
         Json(
@@ -363,12 +374,112 @@ async fn add_price(
     Path(id): Path<String>,
     input: Result<Json<CreateCatalogPrice>, JsonRejection>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let input = catalog_input(input)?;
+    let input = json_input(input)?;
     Ok((
         StatusCode::CREATED,
         Json(
             state
                 .with_store(move |s| s.catalog_add_price(&id, input))
+                .await?,
+        ),
+    ))
+}
+
+async fn business_list(
+    State(state): State<AppState>,
+    input: Result<Query<BusinessFilter>, QueryRejection>,
+) -> Result<impl IntoResponse, ApiError> {
+    let Query(filter) = input
+        .map_err(|error| ApiError(StatusCode::BAD_REQUEST, error.body_text(), "validation"))?;
+    Ok(Json(
+        state.with_store(move |s| s.business_list(filter)).await?,
+    ))
+}
+
+async fn business_detail(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<impl IntoResponse, ApiError> {
+    let detail = state
+        .with_store(move |s| s.business_detail(&id))
+        .await?
+        .ok_or_else(|| {
+            ApiError(
+                StatusCode::NOT_FOUND,
+                "업무 기록을 찾을 수 없습니다.".into(),
+                "not_found",
+            )
+        })?;
+    Ok(Json(detail))
+}
+
+async fn business_create(
+    State(state): State<AppState>,
+    input: Result<Json<CreateBusinessDraft>, JsonRejection>,
+) -> Result<impl IntoResponse, ApiError> {
+    let input = json_input(input)?;
+    Ok((
+        StatusCode::CREATED,
+        Json(state.with_store(move |s| s.business_create(input)).await?),
+    ))
+}
+
+async fn business_revise(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    input: Result<Json<ReviseBusinessDraft>, JsonRejection>,
+) -> Result<impl IntoResponse, ApiError> {
+    let input = json_input(input)?;
+    Ok((
+        StatusCode::CREATED,
+        Json(
+            state
+                .with_store(move |s| s.business_revise(&id, input))
+                .await?,
+        ),
+    ))
+}
+
+async fn business_preview(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    input: Result<Json<PreviewBusiness>, JsonRejection>,
+) -> Result<impl IntoResponse, ApiError> {
+    let input = json_input(input)?;
+    Ok(Json(
+        state
+            .with_store(move |s| s.business_preview(&id, input))
+            .await?,
+    ))
+}
+
+async fn business_confirm(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    input: Result<Json<ConfirmBusiness>, JsonRejection>,
+) -> Result<impl IntoResponse, ApiError> {
+    let input = json_input(input)?;
+    Ok((
+        StatusCode::CREATED,
+        Json(
+            state
+                .with_store(move |s| s.business_confirm(&id, input))
+                .await?,
+        ),
+    ))
+}
+
+async fn business_archive(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    input: Result<Json<ArchiveBusiness>, JsonRejection>,
+) -> Result<impl IntoResponse, ApiError> {
+    let input = json_input(input)?;
+    Ok((
+        StatusCode::CREATED,
+        Json(
+            state
+                .with_store(move |s| s.business_archive(&id, input))
                 .await?,
         ),
     ))
@@ -437,8 +548,12 @@ async fn static_asset(_headers: HeaderMap, request: Request<Body>) -> Response {
     let spa_route = path == "/"
         || path == "/overview"
         || path == "/materials"
+        || path == "/business"
         || path
             .strip_prefix("/materials/")
+            .is_some_and(|id| uuid::Uuid::parse_str(id).is_ok())
+        || path
+            .strip_prefix("/business/")
             .is_some_and(|id| uuid::Uuid::parse_str(id).is_ok());
     let asset_path = if spa_route {
         "index.html"

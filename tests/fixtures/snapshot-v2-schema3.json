@@ -1,0 +1,99 @@
+{
+  "format_version": 2,
+  "schema_version": 3,
+  "sequence": "2",
+  "request_id": "00000000-0000-4000-8000-000000000901",
+  "recorded_at": "2026-10-24T02:00:00.000Z",
+  "state": {
+    "materials": [
+      {
+        "id": "00000000-0000-4000-8000-000000000002",
+        "name": "가상 이전 같은 이름",
+        "unit": "장",
+        "created_at": "2026-10-24T00:00:00.000Z"
+      },
+      {
+        "id": "00000000-0000-4000-8000-000000000001",
+        "name": "가상 이전 같은 이름",
+        "unit": "g",
+        "created_at": "2026-10-24T01:00:00.000Z"
+      }
+    ],
+    "material_versions": [
+      {
+        "id": "00000000-0000-4000-8000-000000000202",
+        "material_id": "00000000-0000-4000-8000-000000000002",
+        "name": "가상 이전 같은 이름",
+        "unit": "장",
+        "canonical_unit": "장",
+        "dimension": "custom",
+        "kind": "unclassified",
+        "description": "",
+        "archived": false,
+        "recorded_at": "2026-10-24T00:00:00.000Z",
+        "seq": null,
+        "source": "legacy_migration"
+      },
+      {
+        "id": "00000000-0000-4000-8000-000000000201",
+        "material_id": "00000000-0000-4000-8000-000000000001",
+        "name": "가상 이전 같은 이름",
+        "unit": "g",
+        "canonical_unit": "g",
+        "dimension": "mass",
+        "kind": "unclassified",
+        "description": "",
+        "archived": false,
+        "recorded_at": "2026-10-24T01:00:00.000Z",
+        "seq": "1",
+        "source": "legacy_snapshot"
+      }
+    ],
+    "material_heads": [
+      {
+        "material_id": "00000000-0000-4000-8000-000000000001",
+        "current_version_id": "00000000-0000-4000-8000-000000000201"
+      },
+      {
+        "material_id": "00000000-0000-4000-8000-000000000002",
+        "current_version_id": "00000000-0000-4000-8000-000000000202"
+      }
+    ],
+    "material_prices": [
+      {
+        "id": "00000000-0000-4000-8000-000000000301",
+        "material_id": "00000000-0000-4000-8000-000000000001",
+        "material_version_id": "00000000-0000-4000-8000-000000000201",
+        "quantity": "1000",
+        "amount": "10",
+        "unit": "g",
+        "input_quantity": "1",
+        "input_unit": "kg",
+        "recorded_at": "2026-10-24T02:00:00.000Z",
+        "seq": "2"
+      }
+    ],
+    "catalog_state": {
+      "epoch": "00000000-0000-4000-8000-000000000501",
+      "revision": "2"
+    },
+    "creation_requests": [
+      {
+        "request_id": "00000000-0000-4000-8000-000000000101",
+        "name": "가상 이전 같은 이름",
+        "unit": "g",
+        "material_id": "00000000-0000-4000-8000-000000000001"
+      }
+    ],
+    "mutation_requests": [
+      {
+        "request_id": "00000000-0000-4000-8000-000000000901",
+        "operation": "material.price",
+        "payload": "[\"00000000-0000-4000-8000-000000000001\",{\"request_id\":\"00000000-0000-4000-8000-000000000901\",\"epoch\":\"00000000-0000-4000-8000-000000000501\",\"expected_revision\":\"1\",\"expected_version_id\":\"00000000-0000-4000-8000-000000000201\",\"quantity\":\"1\",\"amount\":\"10\",\"unit\":\"kg\"}]",
+        "response": "{\"id\":\"00000000-0000-4000-8000-000000000301\",\"material_id\":\"00000000-0000-4000-8000-000000000001\",\"material_version_id\":\"00000000-0000-4000-8000-000000000201\",\"quantity\":\"1000\",\"amount\":\"10\",\"unit\":\"g\",\"input_quantity\":\"1\",\"input_unit\":\"kg\",\"recorded_at\":\"2026-10-24T02:00:00.000Z\",\"seq\":\"2\",\"epoch\":\"00000000-0000-4000-8000-000000000501\",\"revision\":\"2\"}",
+        "epoch": "00000000-0000-4000-8000-000000000501",
+        "sequence": "2"
+      }
+    ]
+  }
+}
