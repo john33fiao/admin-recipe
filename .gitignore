@@ -13,3 +13,25 @@ AGENTS.override.md
 .env
 .env.*
 .DS_Store
+
+# Runtime data (including databases created outside the default db directory)
+db/
+*.sqlite
+*.sqlite3
+*.sqlite3-*
+*.db
+*.db-*
+
+# Rust, Nuxt and local verification outputs
+/target/
+/dist/
+node_modules/
+.nuxt/
+.output/
+.cache/
+playwright-report/
+test-results/
+*.log
+
+# Nuxt generate compatibility symlink
+/frontend/dist
