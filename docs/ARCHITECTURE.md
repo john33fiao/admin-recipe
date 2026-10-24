@@ -4,7 +4,7 @@
 
 T-001의 Rust 서버·Nuxt 내장 UI와 재료 등록·저장·조회 흐름을 구현했다. 전체 운영 업무는 아직 구현하지 않았다. 기본 운영 기준은 [ADR-003](decisions/ADR-003-inventory-events-and-portable-data.md), 운영 예외의 최신 확정은 [ADR-004](decisions/ADR-004-inventory-exception-policies.md)이며, [ADR-002](decisions/ADR-002-first-release-and-local-storage.md)의 개발 단계·SQLite·서버 이관 방향은 유지한다.
 
-[ADR-005](decisions/ADR-005-rust-nuxt-local-server.md)에서 Rust·Nuxt, 로컬 서버·브라우저 자동 열기·WebSocket heartbeat 종료, 새 앱의 이전 DB 지원을 확정했다. 앱 내부 업데이트와 Electron은 현재 범위에 넣지 않는다. [T-001](tickets/T-001-portable-local-app.md)은 macOS ARM64 부분 검증 상태이며 Windows·별도 Mac 배포 기준이 남아 있다. 채택 구현은 [ADR-006](decisions/ADR-006-local-runtime-and-journal.md), 실행 결과는 [검증 기록](tickets/T-001-verification.md)을 따른다.
+[ADR-005](decisions/ADR-005-rust-nuxt-local-server.md)에서 Rust·Nuxt, 로컬 서버·브라우저 자동 열기·WebSocket heartbeat 종료, 새 앱의 이전 DB 지원을 확정했다. 2026-10-24 D-12의 검증 대상은 Windows x64·macOS ARM64다. 앱 내부 업데이트와 Electron은 현재 범위에 넣지 않는다. [T-001](tickets/T-001-portable-local-app.md)은 Windows 후속 검증과 이전 macOS 부분 검증 상태이며 별도 장비 배포·실제 절전·OS 간 이동 기준이 남아 있다. 채택 구현은 [ADR-006](decisions/ADR-006-local-runtime-and-journal.md), 실행 결과는 [검증 기록](tickets/T-001-verification.md)을 따른다.
 
 ## 실행과 저장 경계
 
@@ -46,7 +46,8 @@ heartbeat는 복수 연결·재연결 유예·관측 공백을 구분하고 수�
 | `src/lifecycle.rs` | 복수 연결·만료·재연결·초기 대기·관측 공백의 수명 상태 |
 | `src/store.rs` | 단일 작성자 잠금·SQLite 스키마/트랜잭션·요청 중복 방지·JSON 발행/복구 |
 | `frontend/app/` | 한국어 재료 등록·목록·상세·연결 안내·실패 요청 재시도 |
-| `scripts/build.mjs`, `build.rs` | 정적 생성·입력/산출물 해시·자산 내장 검증 |
+| `scripts/build.mjs`, `build.rs` | 정적 생성·입력/산출물 해시·자산 내장 검증·release 빌드 경로 치환 |
+| `scripts/verify-windows.mjs` | 격리 Chrome/Edge의 실제 30분 백그라운드·브라우저 강제 종료 검증 |
 | `tests/`, `frontend/e2e/` | 가상 자료로 저장·장애·마이그레이션·HTTP·소켓·브라우저 검증 |
 
 스키마 v2·JSON 형식 v1, 파일 구성·저장 완료 의미·호환/복구는 ADR-006에 정의했다. 과거 DB 테스트는 합성 v1 fixture이며 실제 정식 이전 버전의 회귀 검증을 대신하지 않는다. 실행 시 외부 Node·SQLite 개발 도구를 호출하지 않는다. 현재 macOS 산출물의 동적 의존성은 OS 제공 프레임워크와 라이브러리로 확인했다.
