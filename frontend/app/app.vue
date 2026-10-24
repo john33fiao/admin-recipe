@@ -49,6 +49,7 @@ function toggleTheme() {
       <NuxtLink to="/stocktakes" :aria-current="route.path.startsWith('/stocktakes') ? 'page' : undefined">실사</NuxtLink>
       <NuxtLink to="/wastes" :aria-current="route.path.startsWith('/wastes') ? 'page' : undefined">폐기 · 직원식</NuxtLink>
       <NuxtLink to="/sales" :aria-current="route.path === '/sales' || route.path.startsWith('/sales/') ? 'page' : undefined">판매 기록</NuxtLink>
+      <NuxtLink to="/statistics" :aria-current="route.path === '/statistics' ? 'page' : undefined">통계·이력</NuxtLink>
     </nav>
     <ConnectionBanner />
     <main id="main-content" tabindex="-1"><NuxtPage /></main>

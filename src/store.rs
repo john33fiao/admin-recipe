@@ -22,10 +22,12 @@ mod purchase_order;
 mod purchase_return;
 mod receipt;
 mod recipe;
+mod recipe_connections;
 mod reconciliation;
 mod sale;
 mod schema;
 mod snapshot;
+mod statistics;
 mod stocktake;
 mod waste;
 

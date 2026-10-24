@@ -45,8 +45,8 @@ export function restorePending(raw: string | null): PendingMaterial | null {
   }
 }
 
-export function formatCreatedAt(value: string): string {
+export function formatCreatedAt(value: string, timeZone?: string): string {
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return '등록 시각을 확인할 수 없습니다'
-  return new Intl.DateTimeFormat('ko-KR', { dateStyle: 'medium', timeStyle: 'short' }).format(date)
+  return new Intl.DateTimeFormat('ko-KR', { dateStyle: 'medium', timeStyle: 'short', timeZone }).format(date)
 }

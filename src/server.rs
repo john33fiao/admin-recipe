@@ -15,7 +15,9 @@ use crate::{
     purchase_return::PurchaseReturnFilter,
     receipt::ReceiptFilter,
     recipe::{CopyRecipe, CreateRecipe, RecipeFilter, ReviseRecipe},
+    recipe_connections::RecipeConnectionsError,
     sale::SaleFilter,
+    statistics::{StatisticsError, StatisticsQuery},
     stocktake::StocktakeFilter,
     store::{CreateMaterial, Store, StoreError},
     waste::WasteFilter,
@@ -29,7 +31,7 @@ use axum::{
         rejection::{JsonRejection, QueryRejection},
         ws::{Message, WebSocket},
     },
-    http::{HeaderMap, HeaderValue, Method, Request, StatusCode},
+    http::{HeaderMap, HeaderValue, Method, Request, StatusCode, Uri},
     middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -203,6 +205,7 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/api/session", post(session))
         .route("/api/state", get(catalog_state))
+        .route("/api/statistics", get(statistics))
         .route("/api/materials", get(list).post(create))
         .route("/api/materials/{id}", get(detail))
         .route("/api/materials/{id}/versions", post(revise))
@@ -283,6 +286,7 @@ pub fn router(state: AppState) -> Router {
             get(recipe_list).merge(post(recipe_create).layer(DefaultBodyLimit::max(256 * 1024))),
         )
         .route("/api/recipes/{id}", get(recipe_detail))
+        .route("/api/recipes/{id}/connections", get(recipe_connections))
         .route("/api/recipes/{id}/cost", get(recipe_cost))
         .route("/api/recipes/{id}/versions/{version}", get(recipe_version))
         .route(
@@ -377,6 +381,108 @@ async fn session(State(state): State<AppState>, Json(input): Json<Session>) -> R
 }
 async fn catalog_state(State(state): State<AppState>) -> Result<impl IntoResponse, ApiError> {
     Ok(Json(state.with_store(|s| s.catalog_state()).await?))
+}
+
+const MAX_STATISTICS_QUERY_BYTES: usize = 4096;
+fn read_query(uri: &Uri) -> Result<&str, ApiError> {
+    let query = uri.query().unwrap_or_default();
+    if query.len() > MAX_STATISTICS_QUERY_BYTES {
+        return Err(ApiError(
+            StatusCode::URI_TOO_LONG,
+            "조회 조건이 4096바이트를 넘었습니다.".into(),
+            "validation",
+        ));
+    }
+    // Form deserializers can replace malformed UTF-8 or leave invalid escapes
+    // untouched. Reject those encodings before interpreting keys or timestamps.
+    let bytes = query.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut at = 0;
+    while at < bytes.len() {
+        if bytes[at] == b'%' {
+            let a = bytes.get(at + 1).and_then(|b| char::from(*b).to_digit(16));
+            let b = bytes.get(at + 2).and_then(|b| char::from(*b).to_digit(16));
+            let (Some(a), Some(b)) = (a, b) else {
+                return Err(ApiError(
+                    StatusCode::BAD_REQUEST,
+                    "조회 조건의 인코딩이 올바르지 않습니다.".into(),
+                    "validation",
+                ));
+            };
+            decoded.push((a * 16 + b) as u8);
+            at += 3;
+        } else {
+            decoded.push(bytes[at]);
+            at += 1;
+        }
+    }
+    if std::str::from_utf8(&decoded).is_err() {
+        return Err(ApiError(
+            StatusCode::BAD_REQUEST,
+            "조회 조건은 UTF-8이어야 합니다.".into(),
+            "validation",
+        ));
+    }
+    Ok(query)
+}
+fn statistics_error(error: StatisticsError) -> ApiError {
+    let (status, code) = match &error {
+        StatisticsError::Validation(_) => (StatusCode::BAD_REQUEST, "validation"),
+        StatisticsError::ReportTooLarge => (StatusCode::BAD_REQUEST, "report_too_large"),
+        StatisticsError::Unavailable(_) => (StatusCode::SERVICE_UNAVAILABLE, "unavailable"),
+    };
+    ApiError(status, error.to_string(), code)
+}
+async fn statistics(
+    State(state): State<AppState>,
+    uri: Uri,
+) -> Result<impl IntoResponse, ApiError> {
+    read_query(&uri)?;
+    let Query(query) = Query::<StatisticsQuery>::try_from_uri(&uri).map_err(|_| {
+        ApiError(
+            StatusCode::BAD_REQUEST,
+            "시작과 끝 시각을 각각 한 번 지정하세요. 다른 조회 조건은 지원하지 않습니다.".into(),
+            "validation",
+        )
+    })?;
+    let report = state
+        .with_store(move |store| Ok(store.statistics(query)))
+        .await?
+        .map_err(statistics_error)?;
+    Ok(Json(report))
+}
+fn connections_error(error: RecipeConnectionsError) -> ApiError {
+    let (status, code) = match &error {
+        RecipeConnectionsError::Validation(_) => (StatusCode::BAD_REQUEST, "validation"),
+        RecipeConnectionsError::TooLarge => (StatusCode::BAD_REQUEST, "connections_too_large"),
+        RecipeConnectionsError::Unavailable(_) => (StatusCode::SERVICE_UNAVAILABLE, "unavailable"),
+    };
+    ApiError(status, error.to_string(), code)
+}
+async fn recipe_connections(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    uri: Uri,
+) -> Result<impl IntoResponse, ApiError> {
+    if !read_query(&uri)?.is_empty() {
+        return Err(ApiError(
+            StatusCode::BAD_REQUEST,
+            "현재 레시피 연결만 조회하며 추가 조건은 지원하지 않습니다.".into(),
+            "validation",
+        ));
+    }
+    let report = state
+        .with_store(move |store| Ok(store.recipe_connections(&id)))
+        .await?
+        .map_err(connections_error)?
+        .ok_or_else(|| {
+            ApiError(
+                StatusCode::NOT_FOUND,
+                "현재 레시피가 없습니다.".into(),
+                "not_found",
+            )
+        })?;
+    Ok(Json(report))
 }
 
 fn profile_missing() -> ApiError {
@@ -1380,6 +1486,7 @@ async fn static_asset(_headers: HeaderMap, request: Request<Body>) -> Response {
     let spa_route = path == "/"
         || path == "/overview"
         || path == "/workspace"
+        || path == "/statistics"
         || path == "/materials"
         || path == "/business"
         || path == "/orders"

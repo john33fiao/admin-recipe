@@ -26,4 +26,5 @@ useHead({ title: '작업 시작 | 순창한상' })
       <NuxtLink class="primary-button overview-action" to="/">{{ materials.length ? '재료 관리 열기' : '첫 재료 등록하기' }}</NuxtLink>
     </template>
   </section>
+  <section class="overview-panel"><h2>기간의 기록 확인</h2><p>판매·실사 소모와 업무 이력을 같은 기간으로 확인하고 현재 레시피 연결을 살펴보세요.</p><NuxtLink class="primary-link" to="/statistics">통계·이력 열기</NuxtLink></section>
 </template>

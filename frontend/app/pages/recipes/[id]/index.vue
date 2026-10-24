@@ -29,6 +29,7 @@ useHead({ title: computed(() => `${detail.value?.item.name ?? '레시피'} | 순
     <MaterialProfilePanel :key="`profile-${detail.item.id}`" :material-id="detail.item.id" />
     <RecipeEditor :key="detail.item.id" :identity="detail.item.id" :initial="initial" :refresh="load" />
     <RecipeCostPanel :version="detail.head" />
+    <RecipeConnectionsPanel :material-id="detail.item.id" :revision="detail.state.revision" />
     <section class="history-section"><h2>레시피 버전 이력</h2><ol class="history-list recipe-history"><li v-for="version in [...detail.versions].reverse()" :key="version.id"><NuxtLink :to="`/recipes/${detail.item.id}/versions/${version.id}`">{{ formatCreatedAt(version.recorded_at) }} · 기준 {{ version.basis_count }}개</NuxtLink><p class="material-id">기록 {{ version.seq }} · {{ version.id }}</p><p v-if="version.copied_from_version_id">독립 복제로 시작한 배합</p></li></ol></section>
   </template>
 </template>

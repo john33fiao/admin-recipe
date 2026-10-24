@@ -31,7 +31,7 @@ T-002는 계산·데이터 계약, T-020은 공통 UI 기반으로 서로 독립
 | [T-013: 구매 취소·반품과 현재 재고 가치](T-013-purchase-returns.md) | 1차 · 완료 — 현재 평균 반품·한도·정정·실사 연결 검증 | [T-007](T-007-receipts.md), [T-012](T-012-corrections-and-versions.md) |
 | [T-014: 판매·생산·폐기·실사를 모아 입력하는 작업 화면](T-014-closing-workspace.md) | 1차 · 완료 — 개별 저장·복구·부분 실패·실사 순서 검증 | [T-012](T-012-corrections-and-versions.md), [T-013](T-013-purchase-returns.md), [T-020](T-020-ui-foundation.md) |
 | [T-015: 사진·대표 사진·설명과 구입처](T-015-photos-and-suppliers.md) | 1차 · 완료 — 사진·구입처·원본 보존·재시도·호환 검증 | [T-004](T-004-recipes-and-costs.md), [T-005](T-005-business-history.md) |
-| [T-016: 판매 통계·실사 소모·원가 이력 조회](T-016-statistics-and-history.md) | 1차 · 대기 | [T-014](T-014-closing-workspace.md) |
+| [T-016: 판매 통계·실사 소모·원가 이력 조회](T-016-statistics-and-history.md) | 1차 · 완료 — 기간·유효 정정·정확 합계·실제 이력/연결 검증 | [T-014](T-014-closing-workspace.md) |
 | [T-017: 발주·입고·마지막 실사 중심 운영 개요](T-017-operations-overview.md) | 1차 · 대기 | [T-006](T-006-purchase-orders.md), [T-007](T-007-receipts.md), [T-015](T-015-photos-and-suppliers.md), [T-016](T-016-statistics-and-history.md) |
 | [T-018: 사진과 버전 이력을 포함한 전체 상태 복원](T-018-full-state-restore.md) | 1차 · 대기 | [T-014](T-014-closing-workspace.md), [T-015](T-015-photos-and-suppliers.md) |
 | [T-019: 이전 DB·JSON 호환과 같은 OS 데이터 이동](T-019-data-compatibility.md) | 1차 · 대기 | [T-018](T-018-full-state-restore.md) |
