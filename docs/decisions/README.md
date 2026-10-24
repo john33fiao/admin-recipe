@@ -10,7 +10,8 @@
 | [ADR-002: 개발 단계와 로컬 저장·배포 방향](ADR-002-first-release-and-local-storage.md) | 일부 ADR-003으로 대체 | 2026-10-24 |
 | [ADR-003: 입력 시점별 재고·원가와 이동 가능한 데이터](ADR-003-inventory-events-and-portable-data.md) | 채택 | 2026-10-24 |
 | [ADR-004: 재고 운영 예외 네 가지 확정](ADR-004-inventory-exception-policies.md) | 채택 | 2026-10-24 |
-| [ADR-005: Rust·Nuxt 로컬 서버와 DB 하위호환성](ADR-005-rust-nuxt-local-server.md) | 채택, 세부 구현안 제안·실행 미검증 | 2026-10-24 |
+| [ADR-005: Rust·Nuxt 로컬 서버와 DB 하위호환성](ADR-005-rust-nuxt-local-server.md) | 채택, 세부 구현은 ADR-006·T-001 참조 | 2026-10-24 |
+| [ADR-006: 로컬 실행·재료 저장·JSON 기록 구현](ADR-006-local-runtime-and-journal.md) | 채택, OS별 검증 일부 미완료 | 2026-10-24 |
 
 새 기록은 다음 번호의 `ADR-NNN-짧은-제목.md` 형식을 사용하고 다음을 담는다.
 

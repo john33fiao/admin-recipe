@@ -1,0 +1,395 @@
+use crate::{
+    lifecycle::{Lifecycle, Policy},
+    store::{CreateMaterial, Store, StoreError},
+};
+use axum::{
+    Json, Router,
+    body::Body,
+    extract::{
+        DefaultBodyLimit, Path, State, WebSocketUpgrade,
+        ws::{Message, WebSocket},
+    },
+    http::{HeaderMap, HeaderValue, Method, Request, StatusCode},
+    middleware::{self, Next},
+    response::{IntoResponse, Response},
+    routing::{get, post},
+};
+use futures_util::SinkExt;
+use serde::Deserialize;
+use serde_json::json;
+use std::{
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
+    },
+    time::{Duration, Instant, SystemTime},
+};
+use tokio::sync::{Notify, watch};
+
+#[derive(Clone)]
+pub struct AppState(Arc<Inner>);
+struct Inner {
+    store: Mutex<Store>,
+    host: String,
+    token: String,
+    cookie_name: String,
+    lifecycle: Mutex<Lifecycle>,
+    started: Instant,
+    sequence: AtomicU64,
+    stopping: AtomicBool,
+    stop: watch::Sender<bool>,
+    sockets: AtomicUsize,
+    sockets_done: Notify,
+}
+impl AppState {
+    pub fn new(store: Store, host: String, token: String, policy: Policy) -> Self {
+        let (stop, _) = watch::channel(false);
+        let port = host.rsplit(':').next().unwrap_or("local");
+        Self(Arc::new(Inner {
+            store: Mutex::new(store),
+            cookie_name: format!("hansang_{port}"),
+            host,
+            token,
+            lifecycle: Mutex::new(Lifecycle::new(policy)),
+            started: Instant::now(),
+            sequence: AtomicU64::new(0),
+            stopping: AtomicBool::new(false),
+            stop,
+            sockets: AtomicUsize::new(0),
+            sockets_done: Notify::new(),
+        }))
+    }
+    fn now(&self) -> u64 {
+        self.0.started.elapsed().as_millis().min(u64::MAX as u128) as u64
+    }
+    pub fn shutdown(&self) {
+        self.0.stopping.store(true, Ordering::SeqCst);
+        self.0.stop.send_replace(true);
+    }
+    pub async fn cancelled(&self) {
+        let mut stop = self.0.stop.subscribe();
+        if !*stop.borrow() {
+            let _ = stop.changed().await;
+        }
+    }
+    pub async fn wait_for_sockets(&self) {
+        while self.0.sockets.load(Ordering::SeqCst) != 0 {
+            self.0.sockets_done.notified().await;
+        }
+    }
+    pub async fn watchdog(&self) {
+        let mut tick = tokio::time::interval(Duration::from_millis(100));
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let mut wall = SystemTime::now();
+        loop {
+            tokio::select! {
+                _ = self.cancelled() => break,
+                _ = tick.tick() => {
+                    let new_wall = SystemTime::now();
+                    let wall_gap = new_wall.duration_since(wall).unwrap_or_default().as_millis().min(u64::MAX as u128) as u64;
+                    wall = new_wall;
+                    if self.0.lifecycle.lock().unwrap().tick(self.now(), wall_gap) { self.shutdown(); break; }
+                }
+            }
+        }
+    }
+    async fn with_store<T: Send + 'static>(
+        &self,
+        f: impl FnOnce(&mut Store) -> Result<T, StoreError> + Send + 'static,
+    ) -> Result<T, ApiError> {
+        let state = self.clone();
+        tokio::task::spawn_blocking(move || {
+            let mut store = state.0.store.lock().map_err(|_| {
+                ApiError(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "저장소를 다시 열어 주세요.".into(),
+                )
+            })?;
+            // This check under the writer mutex rejects queued work on shutdown.
+            // Once past it, the complete DB + journal operation is allowed to finish.
+            if state.0.stopping.load(Ordering::SeqCst) {
+                return Err(ApiError(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "앱을 종료하는 중입니다.".into(),
+                ));
+            }
+            f(&mut store).map_err(ApiError::from)
+        })
+        .await
+        .map_err(|_| {
+            ApiError(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "저장 작업을 마치지 못했습니다.".into(),
+            )
+        })?
+    }
+}
+
+#[derive(Debug)]
+pub struct ApiError(StatusCode, String);
+impl From<StoreError> for ApiError {
+    fn from(e: StoreError) -> Self {
+        let status = match &e {
+            StoreError::Validation(_) => StatusCode::BAD_REQUEST,
+            StoreError::Conflict(_) => StatusCode::CONFLICT,
+            StoreError::Unavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
+        };
+        Self(status, e.to_string())
+    }
+}
+impl IntoResponse for ApiError {
+    fn into_response(self) -> Response {
+        (self.0, Json(json!({"error": self.1}))).into_response()
+    }
+}
+fn error(status: StatusCode, message: &str) -> Response {
+    ApiError(status, message.into()).into_response()
+}
+
+pub fn router(state: AppState) -> Router {
+    Router::new()
+        .route(
+            "/api/health",
+            get(|| async { Json(json!({"status":"ok"})) }),
+        )
+        .route("/api/session", post(session))
+        .route("/api/materials", get(list).post(create))
+        .route("/api/materials/{id}", get(detail))
+        .route("/api/heartbeat", get(heartbeat))
+        .fallback(static_asset)
+        .layer(DefaultBodyLimit::max(16 * 1024))
+        .layer(middleware::from_fn_with_state(state.clone(), guard))
+        .with_state(state)
+}
+async fn guard(State(state): State<AppState>, request: Request<Body>, next: Next) -> Response {
+    let headers = request.headers();
+    if headers.get("host").and_then(|v| v.to_str().ok()) != Some(state.0.host.as_str()) {
+        return error(StatusCode::FORBIDDEN, "이 앱의 로컬 주소로 접속해 주세요.");
+    }
+    let expected_origin = format!("http://{}", state.0.host);
+    let origin = headers.get("origin").and_then(|v| v.to_str().ok());
+    if origin.is_some_and(|value| value != expected_origin) {
+        return error(
+            StatusCode::FORBIDDEN,
+            "다른 웹사이트의 요청은 허용하지 않습니다.",
+        );
+    }
+    let path = request.uri().path();
+    if path.starts_with("/api/") {
+        if state.0.stopping.load(Ordering::SeqCst) {
+            return error(StatusCode::SERVICE_UNAVAILABLE, "앱을 종료하는 중입니다.");
+        }
+        if (request.method() != Method::GET || path == "/api/heartbeat")
+            && origin != Some(expected_origin.as_str())
+        {
+            return error(StatusCode::FORBIDDEN, "요청의 출처를 확인할 수 없습니다.");
+        }
+        if path != "/api/session" && path != "/api/health" {
+            let expected = format!("{}={}", state.0.cookie_name, state.0.token);
+            let authorized = headers
+                .get_all("cookie")
+                .iter()
+                .filter_map(|h| h.to_str().ok())
+                .any(|c| c.split(';').any(|v| v.trim() == expected));
+            if !authorized {
+                return error(
+                    StatusCode::UNAUTHORIZED,
+                    "실행한 앱의 주소에서 다시 열어 주세요.",
+                );
+            }
+        }
+    }
+    let mut response = next.run(request).await;
+    response.headers_mut().insert(
+        "x-content-type-options",
+        HeaderValue::from_static("nosniff"),
+    );
+    response
+        .headers_mut()
+        .insert("x-frame-options", HeaderValue::from_static("DENY"));
+    response
+        .headers_mut()
+        .insert("referrer-policy", HeaderValue::from_static("no-referrer"));
+    response
+        .headers_mut()
+        .insert("cache-control", HeaderValue::from_static("no-store"));
+    response
+}
+#[derive(Deserialize)]
+struct Session {
+    token: String,
+}
+async fn session(State(state): State<AppState>, Json(input): Json<Session>) -> Response {
+    if input.token != state.0.token {
+        return error(
+            StatusCode::UNAUTHORIZED,
+            "실행한 앱의 주소에서 다시 열어 주세요.",
+        );
+    }
+    let cookie = format!(
+        "{}={}; HttpOnly; SameSite=Strict; Path=/",
+        state.0.cookie_name, state.0.token
+    );
+    (StatusCode::NO_CONTENT, [("set-cookie", cookie)]).into_response()
+}
+async fn list(State(state): State<AppState>) -> Result<impl IntoResponse, ApiError> {
+    Ok(Json(state.with_store(|s| s.list()).await?))
+}
+async fn detail(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<impl IntoResponse, ApiError> {
+    let material = state
+        .with_store(move |s| s.get(&id))
+        .await?
+        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "재료를 찾을 수 없습니다.".into()))?;
+    Ok(Json(material))
+}
+async fn create(
+    State(state): State<AppState>,
+    Json(input): Json<CreateMaterial>,
+) -> Result<impl IntoResponse, ApiError> {
+    Ok((
+        StatusCode::CREATED,
+        Json(state.with_store(move |s| s.create(input)).await?),
+    ))
+}
+
+struct SocketGuard(AppState);
+impl Drop for SocketGuard {
+    fn drop(&mut self) {
+        self.0.0.sockets.fetch_sub(1, Ordering::SeqCst);
+        self.0.0.sockets_done.notify_one();
+    }
+}
+async fn heartbeat(State(state): State<AppState>, upgrade: WebSocketUpgrade) -> Response {
+    // Register before on_upgrade spawns, so shutdown waits for pending upgrades too.
+    state.0.sockets.fetch_add(1, Ordering::SeqCst);
+    let guard = SocketGuard(state.clone());
+    upgrade
+        .max_message_size(1024)
+        .max_frame_size(1024)
+        .on_upgrade(move |socket| websocket(state, socket, guard))
+}
+async fn websocket(state: AppState, mut socket: WebSocket, _guard: SocketGuard) {
+    if state.0.stopping.load(Ordering::SeqCst) {
+        return;
+    }
+    let id = state.0.sequence.fetch_add(1, Ordering::Relaxed);
+    state.0.lifecycle.lock().unwrap().connect(id, state.now());
+    let ping_ms = state.0.lifecycle.lock().unwrap().policy.ping_ms;
+    let mut timer = tokio::time::interval(Duration::from_millis(ping_ms));
+    timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        tokio::select! {
+            biased;
+            _ = state.cancelled() => { break; }
+            message = socket.recv() => match message {
+                Some(Ok(Message::Pong(_))) => { state.0.lifecycle.lock().unwrap().pong(id, state.now()); }
+                Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
+                _ => {},
+            },
+            _ = timer.tick() => {
+                if !state.0.lifecycle.lock().unwrap().contains(id) { break; }
+                if !matches!(tokio::time::timeout(Duration::from_secs(2), socket.send(Message::Ping(Vec::new().into()))).await, Ok(Ok(()))) { break; }
+            }
+        }
+    }
+    state
+        .0
+        .lifecycle
+        .lock()
+        .unwrap()
+        .disconnect(id, state.now());
+    let _ = tokio::time::timeout(Duration::from_secs(1), socket.close()).await;
+}
+#[derive(rust_embed::RustEmbed)]
+#[folder = "frontend/.output/public/"]
+struct Assets;
+
+async fn static_asset(_headers: HeaderMap, request: Request<Body>) -> Response {
+    if request.method() != Method::GET && request.method() != Method::HEAD {
+        return error(
+            StatusCode::METHOD_NOT_ALLOWED,
+            "이 경로에서는 조회만 가능합니다.",
+        );
+    }
+    let path = request.uri().path();
+    let spa_route = path == "/"
+        || path == "/materials"
+        || path
+            .strip_prefix("/materials/")
+            .is_some_and(|id| uuid::Uuid::parse_str(id).is_ok());
+    let asset_path = if spa_route {
+        "index.html"
+    } else {
+        path.trim_start_matches('/')
+    };
+    if path.starts_with("/api/")
+        || asset_path
+            .split('/')
+            .any(|part| part == "." || part == "..")
+    {
+        return error(StatusCode::NOT_FOUND, "요청한 경로를 찾을 수 없습니다.");
+    }
+    match Assets::get(asset_path) {
+        Some(file) => {
+            let mime = mime_guess::from_path(asset_path)
+                .first_or_octet_stream()
+                .to_string();
+            let body = if request.method() == Method::HEAD {
+                Body::empty()
+            } else {
+                Body::from(file.data.into_owned())
+            };
+            ([("content-type", mime)], body).into_response()
+        }
+        None => error(StatusCode::NOT_FOUND, "요청한 파일을 찾을 수 없습니다."),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[tokio::test]
+    async fn shutdown_allows_accepted_write_to_finish_but_refuses_later_work() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = AppState::new(
+            Store::open(dir.path()).unwrap(),
+            "127.0.0.1:4321".into(),
+            "secret".into(),
+            Policy::default(),
+        );
+        let worker = state.clone();
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let accepted = tokio::spawn(async move {
+            worker
+                .with_store(move |store| {
+                    entered_tx.send(()).unwrap();
+                    release_rx.recv().unwrap();
+                    store.create(CreateMaterial {
+                        request_id: uuid::Uuid::new_v4().to_string(),
+                        name: "가상 종료 테스트".into(),
+                        unit: "g".into(),
+                    })
+                })
+                .await
+        });
+        entered_rx.await.unwrap();
+        state.shutdown();
+        assert!(!accepted.is_finished());
+        release_tx.send(()).unwrap();
+        assert_eq!(accepted.await.unwrap().unwrap().name, "가상 종료 테스트");
+        assert!(state.with_store(|s| s.list()).await.is_err());
+        drop(state);
+        let reopened = Store::open(dir.path()).unwrap();
+        assert_eq!(reopened.list().unwrap().len(), 1);
+        assert_eq!(
+            std::fs::read_dir(dir.path().join("snapshots"))
+                .unwrap()
+                .count(),
+            1
+        );
+    }
+}

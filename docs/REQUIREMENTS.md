@@ -1,6 +1,6 @@
 # 요구사항
 
-2026-10-24 기준으로 확정한 1차 운영 요구사항과 남은 기술 설계를 정리한다. 구현 완료를 뜻하지 않는다. 개발 범위는 [ADR-002](decisions/ADR-002-first-release-and-local-storage.md), 기본 운영·저장은 [ADR-003](decisions/ADR-003-inventory-events-and-portable-data.md), 운영 예외 O-01~O-04는 [ADR-004](decisions/ADR-004-inventory-exception-policies.md)를 따른다. 기술스택·로컬 실행과 DB 하위호환 방향은 [ADR-005](decisions/ADR-005-rust-nuxt-local-server.md)에 확정했다. 세부 계산·기록·복원 설계와 실행 검증은 남아 있다.
+2026-10-24 기준으로 확정한 1차 운영 요구사항과 남은 기술 설계를 정리한다. 구현 완료를 뜻하지 않는다. 개발 범위는 [ADR-002](decisions/ADR-002-first-release-and-local-storage.md), 기본 운영·저장은 [ADR-003](decisions/ADR-003-inventory-events-and-portable-data.md), 운영 예외 O-01~O-04는 [ADR-004](decisions/ADR-004-inventory-exception-policies.md)를 따른다. 기술스택·로컬 실행과 DB 하위호환 방향은 [ADR-005](decisions/ADR-005-rust-nuxt-local-server.md)에 확정했다. 세부 계산·전체 복원 설계와 OS별 검증은 남아 있다. T-001에서 재료 등록·조회와 SQLite/JSON 기록·복구를 구현했으며 [ADR-006](decisions/ADR-006-local-runtime-and-journal.md)에 기술 결정을 기록했다. 전체 운영 기능의 완료를 뜻하지 않는다.
 
 ## 목적과 개발 단계
 

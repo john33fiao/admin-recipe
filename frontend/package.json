@@ -1,0 +1,27 @@
+{
+  "name": "sunchang-hansang-ui",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "engines": {
+    "node": "^22.22.3 || ^24.15.0 || >=26.0.0"
+  },
+  "scripts": {
+    "dev": "nuxt dev --host 127.0.0.1",
+    "generate": "nuxt generate",
+    "typecheck": "nuxt typecheck",
+    "test": "node --experimental-strip-types --test tests/*.test.ts",
+    "test:e2e": "playwright test",
+    "postinstall": "nuxt prepare"
+  },
+  "dependencies": {
+    "nuxt": "4.6.2",
+    "vue": "3.5.44",
+    "vue-router": "5.4.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.64.1",
+    "typescript": "6.0.3",
+    "vue-tsc": "3.3.13"
+  }
+}

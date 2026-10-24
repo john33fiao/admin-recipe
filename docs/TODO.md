@@ -2,7 +2,7 @@
 
 ## 현재 단계
 
-기본 운영 결정은 [ADR-003](decisions/ADR-003-inventory-events-and-portable-data.md), O-01~O-04는 [ADR-004](decisions/ADR-004-inventory-exception-policies.md), Rust·Nuxt·로컬 실행·DB 호환 방향은 [ADR-005](decisions/ADR-005-rust-nuxt-local-server.md)에 반영했다. 다음은 세부 데이터·기록·복원 설계와 [첫 구현 티켓](tickets/T-001-portable-local-app.md)의 실행 검증이다. 실행 가능한 앱은 아직 없고 구현 착수는 후속 요청에 따른다.
+기본 운영 결정은 [ADR-003](decisions/ADR-003-inventory-events-and-portable-data.md), O-01~O-04는 [ADR-004](decisions/ADR-004-inventory-exception-policies.md), Rust·Nuxt·로컬 실행·DB 호환 방향은 [ADR-005](decisions/ADR-005-rust-nuxt-local-server.md)에 반영했다. 현재 등록 티켓은 [T-001](tickets/T-001-portable-local-app.md) 하나다. 실행 기반과 재료 등록·SQLite/JSON 저장·조회는 구현했으며 macOS ARM64 검증을 수행했다. Windows·별도 Mac·실제 절전·OS 간 이동 검증이 남아 티켓은 진행 중이다. 아래 후속 아이디어는 이번 구현 범위에 자동 포함하지 않았다.
 
 ## 결정·준비 완료
 
@@ -22,7 +22,7 @@
 - [x] O-01~O-04: 지연 입고 현재 반영·전량 폐기 손실 종료·초과 재고 기존 단가·원기록 보존 정정과 부족 입력 임시 저장 확정
 - [x] Rust·Nuxt, 로컬 서버·브라우저 자동 열기·WebSocket heartbeat 종료 확정
 - [x] 새 앱의 이전 DB 지원, 앱 내부 업데이트·Electron 현재 제외 확정
-- [x] T-001 첫 구현 준비 티켓 작성 — 구현·실행 검증은 미착수
+- [x] T-001 구현 착수 — 실행 기반·재료 저장 흐름 구현, OS별 수용 기준 일부 미검증
 
 ## 1차 구현 준비
 
@@ -40,8 +40,8 @@
 - [ ] heartbeat 재연결·복수 탭·절전 복귀·안전 종료 검증 (T-001)
 - [ ] 이전 DB 순차 마이그레이션·실패 복구·미래 버전 보호 및 과거 JSON 복원 설계
 - [ ] 확정 기능에 맞춰 GUI 설계. 기존 Figma는 참고안으로 사용
-- [ ] 구현 후 실제 실행·검증 명령과 OS별 결과를 README·T-001에 기록
-- [ ] 작은 업무 흐름 하나를 입력 → 저장 → 조회까지 구현
+- [x] 실제 실행·검증 명령과 macOS 결과·다른 OS 미검증을 README·T-001에 기록
+- [x] 재료 이름·관리 단위 입력 → SQLite/JSON 저장 → 목록·상세 조회 구현
 
 ## 2차 범위
 
@@ -66,4 +66,4 @@
 
 ## 검증과 관리
 
-현재는 문서·링크·요구 일치 여부를 검증한다. 앱 코드가 생기면 실제 빌드·테스트·수동 확인 명령을 티켓과 README에 추가한다. 세부 목표는 [티켓](tickets/README.md), 결정은 [ADR](decisions/README.md)에 기록한다. 중대한 변경은 연결 노트와 함께 갱신하며 미반영 항목이 있으면 사유를 보고한다.
+Rust·프론트엔드 단위 테스트, HTTP·WebSocket·장애 복구와 Chromium 사용자 흐름을 검증한다. 명령과 OS별 한계는 README·T-001 검증 기록에 있다. 세부 목표는 [티켓](tickets/README.md), 결정은 [ADR](decisions/README.md)에 기록한다. 중대한 변경은 연결 노트와 함께 갱신하며 미반영 항목이 있으면 사유를 보고한다.

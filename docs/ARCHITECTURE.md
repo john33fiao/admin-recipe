@@ -2,9 +2,9 @@
 
 ## 현재 상태
 
-앱 코드와 런타임 설정은 아직 없다. 기본 운영 기준은 [ADR-003](decisions/ADR-003-inventory-events-and-portable-data.md), 운영 예외의 최신 확정은 [ADR-004](decisions/ADR-004-inventory-exception-policies.md)이며, [ADR-002](decisions/ADR-002-first-release-and-local-storage.md)의 개발 단계·SQLite·서버 이관 방향은 유지한다.
+T-001의 Rust 서버·Nuxt 내장 UI와 재료 등록·저장·조회 흐름을 구현했다. 전체 운영 업무는 아직 구현하지 않았다. 기본 운영 기준은 [ADR-003](decisions/ADR-003-inventory-events-and-portable-data.md), 운영 예외의 최신 확정은 [ADR-004](decisions/ADR-004-inventory-exception-policies.md)이며, [ADR-002](decisions/ADR-002-first-release-and-local-storage.md)의 개발 단계·SQLite·서버 이관 방향은 유지한다.
 
-[ADR-005](decisions/ADR-005-rust-nuxt-local-server.md)에서 Rust·Nuxt, 로컬 서버·브라우저 자동 열기·WebSocket heartbeat 종료, 새 앱의 이전 DB 지원을 확정했다. 앱 내부 업데이트와 Electron은 현재 범위에 넣지 않는다. [T-001](tickets/T-001-portable-local-app.md)은 첫 구현 준비 상태이며 실행 검증을 완료한 것은 아니다.
+[ADR-005](decisions/ADR-005-rust-nuxt-local-server.md)에서 Rust·Nuxt, 로컬 서버·브라우저 자동 열기·WebSocket heartbeat 종료, 새 앱의 이전 DB 지원을 확정했다. 앱 내부 업데이트와 Electron은 현재 범위에 넣지 않는다. [T-001](tickets/T-001-portable-local-app.md)은 macOS ARM64 부분 검증 상태이며 Windows·별도 Mac 배포 기준이 남아 있다. 채택 구현은 [ADR-006](decisions/ADR-006-local-runtime-and-journal.md), 실행 결과는 [검증 기록](tickets/T-001-verification.md)을 따른다.
 
 ## 실행과 저장 경계
 
@@ -14,7 +14,7 @@
 - 사진은 해시 등 고유명칭을 쓰고 기기별 절대경로에 의존하지 않는다.
 - 다른 PC·Mac의 OS별 빌드에서도 SQLite 또는 JSON의 동일 데이터를 사용한다. 사진을 포함한 이동은 `db/` 전체를 대상으로 한다.
 - SQLite가 기본 저장소이며 실제 데이터 변경마다 JSON 기록을 남긴다. 기록은 무기한 보관하고 복원은 현재 데이터 전체를 선택한 시점 상태로 되돌린다.
-- 기록 형식·파일명·일관성·복원 절차는 아직 구현하지 않았다. 현재 요구만으로 JSON을 단일 최신 파일로 덮어써 과거 상태를 잃는 방식으로 해석하지 않는다.
+- 재료 변경의 전체 JSON 스냅샷·내구성 있는 기록 대기열·누락 복구를 구현했다. 선택 시점 전체 복원·사진은 미구현이다. 현재 요구만으로 JSON을 단일 최신 파일로 덮어써 과거 상태를 잃는 방식으로 해석하지 않는다.
 - 안정화 후 서버 이관 방향은 유지한다. Rust 업무·API 계층의 재사용을 제안하며 실제 서버 배포 환경·인증은 전환 때 설계한다.
 
 ## 업무·계산 경계
@@ -33,9 +33,23 @@
 
 JSON 기록의 저장 단위, 증분 기록/스냅샷 조합, 장애 시 SQLite와의 일관성, 과거 사진 보존은 기술 설계로 제시한다. SQLite 이동은 파일 형식뿐 아니라 앱 스키마·사진 경로와 종료/내보내기 절차까지 검증한다. WAL을 사용한다면 보조 파일도 db/ 안에 두고 단독 DB 파일의 불완전한 복사를 막는다. [SQLite WAL 설명](https://www.sqlite.org/wal.html)
 
-Rust·Nuxt와 브라우저 실행은 확정됐다. 권장 구성은 Nuxt 정적 SPA를 Rust에 내장하고 Axum·Tokio가 HTTP·WebSocket을, rusqlite `bundled`가 SQLite를 처리하는 안이다. 이는 구현 제안이며 라이브러리 버전은 아직 고정하지 않았다. Nuxt 자산 생성 후 OS별 release 빌드가 필요하며, 단일 바이너리·추가 런타임 불필요 여부는 배포물로 검증한다. 근거와 대안은 ADR-005를 따른다.
+Rust·Nuxt와 브라우저 실행은 확정됐다. 현재 구성은 Nuxt 정적 SPA를 Rust에 내장하고 Axum·Tokio가 HTTP·WebSocket을, rusqlite `bundled`가 SQLite를 처리한다. T-001에서 이 구성을 채택하고 Cargo.lock·frontend/package-lock.json에 버전을 고정했다. Nuxt 자산 생성 후 OS별 release 빌드가 필요하며, 단일 바이너리·추가 런타임 불필요 여부는 배포물로 검증한다. 근거와 대안은 ADR-005를 따른다.
 
-heartbeat는 모든 화면 연결의 상실·재연결 유예·절전 복귀를 구분하고 저장·복원 중 안전 종료를 보장하도록 설계한다. 새 앱은 이전 DB를 지원하며 순차 마이그레이션·실패 복구·미래 스키마 보호를 제안한다. JSON 기록의 버전 호환과 사진을 포함한 전체 복원도 별도 검증한다.
+heartbeat는 복수 연결·재연결 유예·관측 공백을 구분하고 수락한 저장의 완료를 기다리도록 구현했다. 순차 마이그레이션·실패 복구·미래 스키마 보호는 합성 fixture 범위에서 검증했다. 실제 절전·정식 이전 버전·과거 JSON과 사진 전체 복원은 별도 검증 대상이다.
+
+## 구현 모듈
+
+| 경로 | 책임 |
+| --- | --- |
+| `src/main.rs` | 실행파일 기준 경로·loopback 서버·브라우저·정상 종료 |
+| `src/server.rs` | API·세션·Host/Origin 검증·정적 라우팅·WebSocket 작업 관리 |
+| `src/lifecycle.rs` | 복수 연결·만료·재연결·초기 대기·관측 공백의 수명 상태 |
+| `src/store.rs` | 단일 작성자 잠금·SQLite 스키마/트랜잭션·요청 중복 방지·JSON 발행/복구 |
+| `frontend/app/` | 한국어 재료 등록·목록·상세·연결 안내·실패 요청 재시도 |
+| `scripts/build.mjs`, `build.rs` | 정적 생성·입력/산출물 해시·자산 내장 검증 |
+| `tests/`, `frontend/e2e/` | 가상 자료로 저장·장애·마이그레이션·HTTP·소켓·브라우저 검증 |
+
+스키마 v2·JSON 형식 v1, 파일 구성·저장 완료 의미·호환/복구는 ADR-006에 정의했다. 과거 DB 테스트는 합성 v1 fixture이며 실제 정식 이전 버전의 회귀 검증을 대신하지 않는다. 실행 시 외부 Node·SQLite 개발 도구를 호출하지 않는다. 현재 macOS 산출물의 동적 의존성은 OS 제공 프레임워크와 라이브러리로 확인했다.
 
 ## 남은 구현 설계
 
@@ -44,10 +58,10 @@ heartbeat는 모든 화면 연결의 상실·재연결 유예·절전 복귀를 
 | 재고 | 품목 ID·전환 참조, 입력 순서·중복 방지, 실사 초과분과 전량 폐기 |
 | 원가 | 잔량 0의 손실·반품 차액·여러 결과물·정밀도, 과거 입고일의 계산 적용 순서 |
 | 메뉴 | 복제 시 독립성·이름 충돌 처리, 메뉴별 재료 구성과 사용량 |
-| 저장 | SQLite 스키마·버전, JSON 형식·파일명, 변경 기록 실패 시 일관성 |
+| 저장 | 재료 흐름 스키마·JSON 기록/복구 구현. 향후 업무 스키마·정식 이전 버전별 회귀 검증 |
 | 복원·이동 | 선택 상태 전체 복원, 사진·JSON·DB 정합성, OS 간 읽기·복원 검증 |
 | 설치·실행 | Windows·macOS 빌드·UI 내장·브라우저 열기·heartbeat 안전 종료, 수동 교체·바이너리 기준 경로 처리 |
 | 서버 전환 | 전환 조건·환경·계정·권한·이관 절차 |
-| 구현 기술 | Rust·Nuxt 확정. 세부 라이브러리·버전·빌드 자동화·검증 도구는 설계 |
+| 구현 기술 | 라이브러리 버전·빌드 자동화·검증 도구 채택 완료. OS별 배포 검증은 남음 |
 
 기술 설계 항목을 사용자에게 미결정 운영 요구로 다시 묻기 전에 현재 확정 규칙으로 도출할 수 있는지 확인한다. 부분 입고·보관 위치·초기 자료 이관을 첫 구현의 선행 조건으로 두지 않는다.
