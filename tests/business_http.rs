@@ -190,7 +190,7 @@ async fn draft_envelopes_reject_unknown_fields_and_numeric_input_without_writes(
     future["payload"]["version"] = json!(2);
     invalid.push(future);
     let mut unsupported = input.clone();
-    unsupported["payload"]["kind"] = json!("sale");
+    unsupported["payload"]["kind"] = json!("future_business_kind");
     invalid.push(unsupported);
     for input in invalid {
         let response = send(&app, "POST", "/api/business/drafts", Some(&input)).await;

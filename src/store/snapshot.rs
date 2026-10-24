@@ -1,12 +1,13 @@
 use super::{
     Material, SCHEMA_VERSION, StoreError, business, catalog, holding, production, purchase_order,
-    read_materials, receipt, recipe, unavailable,
+    read_materials, receipt, recipe, sale, unavailable,
 };
 use crate::catalog::{CatalogState, MaterialPriceVersion, MaterialVersion};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 mod frozen6;
 mod frozen7;
+mod frozen8;
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -219,13 +220,13 @@ struct SnapshotStateV5 {
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct SnapshotV2Schema8 {
+struct SnapshotV2Schema9 {
     format_version: u32,
     schema_version: i64,
     sequence: String,
     request_id: String,
     recorded_at: String,
-    state: SnapshotStateV8,
+    state: SnapshotStateV9,
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -282,7 +283,7 @@ struct SnapshotStateV7 {
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct SnapshotStateV8 {
+struct SnapshotStateV9 {
     materials: Vec<Material>,
     material_versions: Vec<MaterialVersion>,
     material_heads: Vec<Head>,
@@ -310,6 +311,10 @@ struct SnapshotStateV8 {
     production_inputs: Vec<production::InputRow>,
     production_outputs: Vec<production::OutputRow>,
     production_effects: Vec<production::EffectRow>,
+    sales: Vec<sale::RecordRow>,
+    sale_versions: Vec<crate::sale::SaleVersion>,
+    sale_heads: Vec<sale::Head>,
+    sale_cost_rows: Vec<sale::CostRow>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -423,7 +428,8 @@ pub(super) fn encode(
     let orders = purchase_order::order_snapshot_rows(connection)?;
     let recipes = recipe::snapshot_rows(connection)?;
     let productions = production::snapshot_rows(connection)?;
-    let state = SnapshotStateV8 {
+    let sales = sale::snapshot_rows(connection)?;
+    let state = SnapshotStateV9 {
         materials: old.materials,
         material_versions: old.material_versions,
         material_heads: old.material_heads,
@@ -451,8 +457,12 @@ pub(super) fn encode(
         production_inputs: productions.inputs,
         production_outputs: productions.outputs,
         production_effects: productions.effects,
+        sales: sales.records,
+        sale_versions: sales.versions,
+        sale_heads: sales.heads,
+        sale_cost_rows: sales.cost_rows,
     };
-    let snapshot = SnapshotV2Schema8 {
+    let snapshot = SnapshotV2Schema9 {
         format_version: 2,
         schema_version: SCHEMA_VERSION,
         sequence: sequence.to_string(),
@@ -595,77 +605,14 @@ pub(super) fn validate_source(
             matching_sequence
         }
         (Some(2), Some(8)) => {
-            let current: SnapshotV2Schema8 = serde_json::from_str(payload).map_err(unavailable)?;
-            let state = &current.state;
-            for revision in &state.business_revisions {
-                crate::business::normalize_business_payload(revision.payload.clone())
-                    .map_err(unavailable)?;
-            }
-            for version in &state.purchase_order_versions {
-                purchase_order::validate_stored_version(version)?;
-            }
-            validate_receipt_references(ReceiptReferences {
-                business_records: &state.business_records,
-                business_revisions: &state.business_revisions,
-                business_confirmations: &state.business_confirmations,
-                business_catalog_price_results: &state.business_catalog_price_results,
-                materials: &state.materials,
-                material_versions: &state.material_versions,
-                receipts: &state.receipts,
-                purchase_order_versions: &state.purchase_order_versions,
-            })?;
-            receipt::validate_receipt_links(
-                &state.receipts,
-                &state.order_receipt_closures,
-                &state.purchase_order_versions,
-            )?;
-            holding::validate_snapshot(
-                &state.receipts,
-                &state.production_effects,
-                &state.holding_versions,
-                &state.holding_heads,
-            )?;
-            let mutations: Vec<_> = state
-                .mutation_requests
-                .iter()
-                .map(|r| (r.sequence.as_str(), r.operation.as_str()))
-                .collect();
-            recipe::validate_snapshot(
-                &state.recipe_versions,
-                &state.recipe_lines,
-                &state.recipe_heads,
-                &state.material_versions,
-                &state.materials,
-                &mutations,
-                sequence,
-            )?;
-            let other_confirmations: Vec<_> = state
-                .business_catalog_price_results
-                .iter()
-                .map(|r| r.confirmation_id.as_str())
-                .chain(
-                    state
-                        .purchase_order_versions
-                        .iter()
-                        .map(|r| r.confirmation_id.as_str()),
-                )
-                .chain(state.receipts.iter().map(|r| r.confirmation_id.as_str()))
-                .collect();
-            production::validate_snapshot(production::Validation {
-                records: &state.productions,
-                inputs: &state.production_inputs,
-                outputs: &state.production_outputs,
-                effects: &state.production_effects,
-                holdings: &state.holding_versions,
-                business_records: &state.business_records,
-                revisions: &state.business_revisions,
-                confirmations: &state.business_confirmations,
-                material_versions: &state.material_versions,
-                materials: &state.materials,
-                other_confirmation_ids: &other_confirmations,
-                mutations: &mutations,
-                sequence,
-            })?;
+            let frozen: frozen8::Snapshot = serde_json::from_str(payload).map_err(unavailable)?;
+            let matching_sequence = frozen.sequence == sequence.to_string();
+            validate_current_state(&frozen.into_state()?, sequence)?;
+            matching_sequence
+        }
+        (Some(2), Some(9)) => {
+            let current: SnapshotV2Schema9 = serde_json::from_str(payload).map_err(unavailable)?;
+            validate_current_state(&current.state, sequence)?;
             current.sequence == sequence.to_string()
         }
         _ => false,
@@ -673,6 +620,117 @@ pub(super) fn validate_source(
     if !supported {
         return Err(unavailable("지원하지 않거나 손상된 JSON 변경 기록입니다"));
     }
+    Ok(())
+}
+
+fn validate_current_state(state: &SnapshotStateV9, sequence: i64) -> Result<(), StoreError> {
+    for revision in &state.business_revisions {
+        crate::business::normalize_business_payload(revision.payload.clone())
+            .map_err(unavailable)?;
+    }
+    for version in &state.purchase_order_versions {
+        purchase_order::validate_stored_version(version)?;
+    }
+    validate_receipt_references(ReceiptReferences {
+        business_records: &state.business_records,
+        business_revisions: &state.business_revisions,
+        business_confirmations: &state.business_confirmations,
+        business_catalog_price_results: &state.business_catalog_price_results,
+        materials: &state.materials,
+        material_versions: &state.material_versions,
+        receipts: &state.receipts,
+        purchase_order_versions: &state.purchase_order_versions,
+    })?;
+    receipt::validate_receipt_links(
+        &state.receipts,
+        &state.order_receipt_closures,
+        &state.purchase_order_versions,
+    )?;
+    holding::validate_snapshot(
+        &state.receipts,
+        &state.production_effects,
+        &state.holding_versions,
+        &state.holding_heads,
+    )?;
+    let mutations: Vec<_> = state
+        .mutation_requests
+        .iter()
+        .map(|r| (r.sequence.as_str(), r.operation.as_str()))
+        .collect();
+    recipe::validate_snapshot(
+        &state.recipe_versions,
+        &state.recipe_lines,
+        &state.recipe_heads,
+        &state.material_versions,
+        &state.materials,
+        &mutations,
+        sequence,
+    )?;
+    let other_confirmations: Vec<_> = state
+        .business_catalog_price_results
+        .iter()
+        .map(|r| r.confirmation_id.as_str())
+        .chain(
+            state
+                .purchase_order_versions
+                .iter()
+                .map(|r| r.confirmation_id.as_str()),
+        )
+        .chain(state.receipts.iter().map(|r| r.confirmation_id.as_str()))
+        .collect();
+    production::validate_snapshot(production::Validation {
+        records: &state.productions,
+        inputs: &state.production_inputs,
+        outputs: &state.production_outputs,
+        effects: &state.production_effects,
+        holdings: &state.holding_versions,
+        business_records: &state.business_records,
+        revisions: &state.business_revisions,
+        confirmations: &state.business_confirmations,
+        material_versions: &state.material_versions,
+        materials: &state.materials,
+        other_confirmation_ids: &other_confirmations,
+        mutations: &mutations,
+        sequence,
+    })?;
+    let sale_other_confirmations: Vec<_> = other_confirmations
+        .into_iter()
+        .chain(
+            state
+                .productions
+                .iter()
+                .map(|row| row.confirmation_id.as_str()),
+        )
+        .collect();
+    let sale_mutations: Vec<_> = state
+        .mutation_requests
+        .iter()
+        .map(|r| {
+            (
+                r.sequence.as_str(),
+                r.operation.as_str(),
+                r.request_id.as_str(),
+            )
+        })
+        .collect();
+    sale::validate_snapshot(sale::Validation {
+        records: &state.sales,
+        cost_rows: &state.sale_cost_rows,
+        versions: &state.sale_versions,
+        heads: &state.sale_heads,
+        recipe_versions: &state.recipe_versions,
+        recipe_lines: &state.recipe_lines,
+        holdings: &state.holding_versions,
+        prices: &state.material_prices,
+        material_versions: &state.material_versions,
+        business_records: &state.business_records,
+        revisions: &state.business_revisions,
+        confirmations: &state.business_confirmations,
+        corrections: &state.business_corrections,
+        other_confirmation_ids: &sale_other_confirmations,
+        mutations: &sale_mutations,
+        sequence,
+    })?;
     Ok(())
 }
 
@@ -685,6 +743,92 @@ struct ReceiptReferences<'a> {
     material_versions: &'a [MaterialVersion],
     receipts: &'a [crate::receipt::ReceiptRecord],
     purchase_order_versions: &'a [crate::purchase_order::OrderVersion],
+}
+
+#[cfg(test)]
+mod schema8_reader_tests {
+    use super::validate_source;
+    use serde_json::{Value, json};
+
+    fn fixture() -> Value {
+        serde_json::from_str(include_str!(
+            "../../tests/fixtures/snapshot-v2-schema8.json"
+        ))
+        .unwrap()
+    }
+    fn accepts(value: &Value) -> bool {
+        let sequence = value["sequence"].as_str().unwrap().parse().unwrap();
+        validate_source(&value.to_string(), sequence, 8).is_ok()
+    }
+
+    #[test]
+    fn original_production_snapshot_remains_valid_before_sale_conversion() {
+        let original = include_str!("../../tests/fixtures/snapshot-v2-schema8.json");
+        let value = fixture();
+        assert!(accepts(&value));
+        assert!(value["state"].get("sales").is_none());
+        assert_eq!(serde_json::from_str::<Value>(original).unwrap(), value);
+    }
+
+    #[test]
+    fn schema8_rejects_sale_kinds_collections_and_future_source_header() {
+        let original = fixture();
+        let mut changed = original.clone();
+        changed["state"]["business_records"][0]["kind"] = json!("sale");
+        assert!(!accepts(&changed));
+        let mut changed = original.clone();
+        changed["state"]["business_revisions"][0]["payload"] = json!({
+            "kind":"sale","version":1,"data":{"material_id":null,
+                "material_version_id":null,"recipe_version_id":null,"count":"0","note":""}
+        });
+        assert!(!accepts(&changed));
+        for key in ["sales", "sale_versions", "sale_heads", "sale_cost_rows"] {
+            let mut changed = original.clone();
+            changed["state"][key] = json!([]);
+            assert!(!accepts(&changed), "{key}");
+        }
+        let mut changed = original;
+        changed["schema_version"] = json!(9);
+        assert!(!accepts(&changed));
+    }
+
+    #[test]
+    fn schema8_keeps_nested_production_and_holding_shapes_closed() {
+        let original = fixture();
+        for path in [
+            "/state/productions/0",
+            "/state/production_inputs/0",
+            "/state/production_inputs/0/row",
+            "/state/production_outputs/0/row",
+            "/state/production_effects/0",
+            "/state/holding_versions/0",
+            "/state/holding_heads/0",
+        ] {
+            let mut changed = original.clone();
+            changed
+                .pointer_mut(path)
+                .unwrap()
+                .as_object_mut()
+                .unwrap()
+                .insert(
+                    "sale_id".into(),
+                    json!("00000000-0000-4000-8000-000000000001"),
+                );
+            assert!(!accepts(&changed), "{path}");
+        }
+        let index = original["state"]["business_revisions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .position(|row| row["payload"]["kind"] == "production")
+            .unwrap();
+        for key in ["inputs", "outputs"] {
+            let mut changed = original.clone();
+            changed["state"]["business_revisions"][index]["payload"]["data"][key][0]["sale_quantity"] =
+                json!("0");
+            assert!(!accepts(&changed), "{key}");
+        }
+    }
 }
 
 fn validate_receipt_references(state: ReceiptReferences<'_>) -> Result<(), StoreError> {

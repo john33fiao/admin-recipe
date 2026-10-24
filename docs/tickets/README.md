@@ -20,11 +20,11 @@ T-002는 계산·데이터 계약, T-020은 공통 UI 기반으로 서로 독립
 | [T-002: 수량·원가와 소모 보정 계산 계약](T-002-domain-contract.md) | 1차 · 설계 완료 — 독립 검토 통과 | 없음 |
 | [T-003: 재료·상태·단위와 사전 가격 관리](T-003-materials-and-units.md) | 1차 · 완료 — 재료/사전 가격 검증, 보유 원장 연결은 T-007 | [T-002](T-002-domain-contract.md), [T-020](T-020-ui-foundation.md) |
 | [T-004: 레시피·메뉴 복제와 사전 원가 계산](T-004-recipes-and-costs.md) | 1차 · 완료 — 직접 구성·버전·원가·복제 검증 | [T-003](T-003-materials-and-units.md), [T-005](T-005-business-history.md) |
-| [T-005: 업무 기록·임시 저장·확정과 JSON 기록 확장](T-005-business-history.md) | 1차 · 공통 기반 검증 완료 · 판매 통합 T-009 대기 | [T-002](T-002-domain-contract.md), [T-003](T-003-materials-and-units.md) |
+| [T-005: 업무 기록·임시 저장·확정과 JSON 기록 확장](T-005-business-history.md) | 1차 · 완료 — 공통 기반·실제 판매 통합 검증 | [T-002](T-002-domain-contract.md), [T-003](T-003-materials-and-units.md) |
 | [T-006: 발주 내역과 미입고 주문량](T-006-purchase-orders.md) | 1차 · 완료 — 실제 입고 연결 T-007 | [T-003](T-003-materials-and-units.md), [T-005](T-005-business-history.md) |
 | [T-007: 실측 입고와 보유 평균 원가](T-007-receipts.md) | 1차 · 완료 — 실사/보정 연결은 T-010/T-011 | [T-006](T-006-purchase-orders.md) |
 | [T-008: 실측 손질·비축 생산과 원가 이월](T-008-production.md) | 1차 · 완료 — 실측 생산·원가 배분·보유 이력 검증 | [T-004](T-004-recipes-and-costs.md), [T-007](T-007-receipts.md) |
-| [T-009: 판매 수량·금액과 실사 소모 연결](T-009-sales-consumption.md) | 1차 · 착수 가능 | [T-004](T-004-recipes-and-costs.md), [T-008](T-008-production.md) |
+| [T-009: 판매 수량·금액과 실사 소모 연결](T-009-sales-consumption.md) | 1차 · 판매 구현·검증 완료 · 05 실사 후 표시 T-010 대기 | [T-004](T-004-recipes-and-costs.md), [T-008](T-008-production.md) |
 | [T-010: 명시 폐기·선택 실사와 판매 소모 배분](T-010-stocktake-and-waste.md) | 1차 · 대기 | [T-008](T-008-production.md), [T-009](T-009-sales-consumption.md) |
 | [T-011: 실사에 포함된 지연 입고 보정](T-011-late-receipt-reconciliation.md) | 1차 · 대기 | [T-007](T-007-receipts.md), [T-010](T-010-stocktake-and-waste.md) |
 | [T-012: 업무 오입력 정정과 버전·아카이브 이력](T-012-corrections-and-versions.md) | 1차 · 대기 | [T-009](T-009-sales-consumption.md), [T-010](T-010-stocktake-and-waste.md), [T-011](T-011-late-receipt-reconciliation.md) |

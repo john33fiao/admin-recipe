@@ -565,86 +565,94 @@ impl Store {
         id: &str,
         version: Option<&str>,
     ) -> Result<Option<RecipeCost>, StoreError> {
-        let id = catalog::uuid(id, "소유 품목 ID")?;
-        let row = match version {
-            Some(version) => {
-                let version = catalog::uuid(version, "레시피 버전")?;
-                versions(&self.connection, Some(&id), Some(&version))?
-                    .into_iter()
-                    .next()
-            }
-            None => current(&self.connection, &id)?,
-        };
-        let Some(row) = row else {
-            return Ok(None);
-        };
-        let recipe = full_version(&self.connection, row)?;
-        let mut inputs = vec![];
-        let mut rows = vec![];
-        let mut missing = vec![];
-        for line in &recipe.lines {
-            let price = holding::price(
-                &self.connection,
-                &line.material_id,
-                catalog::registered_price(&self.connection, &line.material_id)?,
-            )?;
-            let unit_price = match (&price.amount, &price.quantity, &price.source_id) {
-                (Some(amount), Some(quantity), Some(source)) => Some(
-                    UnitPrice::new(
-                        Money::parse(amount).map_err(unavailable)?,
-                        Quantity::parse(quantity).map_err(unavailable)?,
-                        source.clone(),
-                    )
-                    .map_err(unavailable)?,
-                ),
-                (None, None, _) => None,
-                _ => return Err(unavailable("구성 품목의 가격 출처가 올바르지 않습니다")),
-            };
-            if unit_price.is_none() {
-                missing.push(line.id.clone());
-            }
-            inputs.push(RecipeCostLineInput {
-                numerator: Quantity::parse(&line.quantity).map_err(unavailable)?,
-                price: unit_price,
-            });
-            rows.push(RecipeCostRow {
-                line_id: line.id.clone(),
-                material_id: line.material_id.clone(),
-                material_version_id: line.material_version_id.clone(),
-                numerator_quantity: line.quantity.clone(),
-                basis_count: recipe.basis_count.clone(),
-                unit: line.unit.clone(),
-                price,
-                cost: None,
-            });
-        }
-        let value = cost_recipe(&RecipeCostInput {
-            basis_count: parse_basis_count(&recipe.basis_count).map_err(unavailable)?,
-            rows: inputs,
-            selling_price: recipe
-                .selling_price
-                .as_ref()
-                .map(|p| Money::parse(p).map_err(unavailable))
-                .transpose()?,
-        })
-        .map_err(validation)?;
-        for (row, cost) in rows.iter_mut().zip(value.row_costs) {
-            row.cost = cost.map(|m| m.decimal());
-        }
-        Ok(Some(RecipeCost {
-            recipe_version_id: recipe.id,
-            basis_count: recipe.basis_count,
-            price_mode: "current".into(),
-            rows,
-            missing_price_line_ids: missing,
-            known_subtotal: value.known_subtotal.decimal(),
-            total_cost: value.total_cost.map(|m| m.decimal()),
-            selling_price: recipe.selling_price,
-            cost_ratio: value.cost_ratio,
-            ratio_unavailable_reason: value.ratio_unavailable_reason,
-            state: catalog::state(&self.connection)?,
-        }))
+        cost_at_current(&self.connection, id, version)
     }
+}
+
+pub(super) fn cost_at_current(
+    connection: &Connection,
+    id: &str,
+    version: Option<&str>,
+) -> Result<Option<RecipeCost>, StoreError> {
+    let id = catalog::uuid(id, "소유 품목 ID")?;
+    let row = match version {
+        Some(version) => {
+            let version = catalog::uuid(version, "레시피 버전")?;
+            versions(connection, Some(&id), Some(&version))?
+                .into_iter()
+                .next()
+        }
+        None => current(connection, &id)?,
+    };
+    let Some(row) = row else {
+        return Ok(None);
+    };
+    let recipe = full_version(connection, row)?;
+    let mut inputs = vec![];
+    let mut rows = vec![];
+    let mut missing = vec![];
+    for line in &recipe.lines {
+        let price = holding::price(
+            connection,
+            &line.material_id,
+            catalog::registered_price(connection, &line.material_id)?,
+        )?;
+        let unit_price = match (&price.amount, &price.quantity, &price.source_id) {
+            (Some(amount), Some(quantity), Some(source)) => Some(
+                UnitPrice::new(
+                    Money::parse(amount).map_err(unavailable)?,
+                    Quantity::parse(quantity).map_err(unavailable)?,
+                    source.clone(),
+                )
+                .map_err(unavailable)?,
+            ),
+            (None, None, _) => None,
+            _ => return Err(unavailable("구성 품목의 가격 출처가 올바르지 않습니다")),
+        };
+        if unit_price.is_none() {
+            missing.push(line.id.clone());
+        }
+        inputs.push(RecipeCostLineInput {
+            numerator: Quantity::parse(&line.quantity).map_err(unavailable)?,
+            price: unit_price,
+        });
+        rows.push(RecipeCostRow {
+            line_id: line.id.clone(),
+            material_id: line.material_id.clone(),
+            material_version_id: line.material_version_id.clone(),
+            numerator_quantity: line.quantity.clone(),
+            basis_count: recipe.basis_count.clone(),
+            unit: line.unit.clone(),
+            price,
+            cost: None,
+        });
+    }
+    let value = cost_recipe(&RecipeCostInput {
+        basis_count: parse_basis_count(&recipe.basis_count).map_err(unavailable)?,
+        rows: inputs,
+        selling_price: recipe
+            .selling_price
+            .as_ref()
+            .map(|p| Money::parse(p).map_err(unavailable))
+            .transpose()?,
+    })
+    .map_err(validation)?;
+    for (row, cost) in rows.iter_mut().zip(value.row_costs) {
+        row.cost = cost.map(|m| m.decimal());
+    }
+    Ok(Some(RecipeCost {
+        recipe_version_id: recipe.id,
+        basis_count: recipe.basis_count,
+        price_mode: "current".into(),
+        rows,
+        missing_price_line_ids: missing,
+        known_subtotal: value.known_subtotal.decimal(),
+        total_cost: value.total_cost.map(|m| m.decimal()),
+        selling_price: recipe.selling_price,
+        cost_ratio: value.cost_ratio,
+        ratio_unavailable_reason: value.ratio_unavailable_reason,
+        state: catalog::state(connection)?,
+    }))
 }
 
 pub(super) fn snapshot_rows(connection: &Connection) -> Result<SnapshotRows, StoreError> {

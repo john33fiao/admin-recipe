@@ -12,6 +12,7 @@ use crate::{
     purchase_order::OrderFilter,
     receipt::ReceiptFilter,
     recipe::{CopyRecipe, CreateRecipe, RecipeFilter, ReviseRecipe},
+    sale::SaleFilter,
     store::{CreateMaterial, Store, StoreError},
 };
 use axum::{
@@ -213,6 +214,8 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/api/productions", get(production_list))
         .route("/api/productions/{id}", get(production_detail))
+        .route("/api/sales", get(sale_list))
+        .route("/api/sales/{id}", get(sale_detail))
         .route("/api/orders", get(order_list))
         .route("/api/orders/{id}", get(order_detail))
         .route("/api/receipts", get(receipt_list))
@@ -593,6 +596,32 @@ async fn production_detail(
     Ok(Json(detail))
 }
 
+async fn sale_list(
+    State(state): State<AppState>,
+    input: Result<Query<SaleFilter>, QueryRejection>,
+) -> Result<impl IntoResponse, ApiError> {
+    let Query(filter) = input
+        .map_err(|error| ApiError(StatusCode::BAD_REQUEST, error.body_text(), "validation"))?;
+    Ok(Json(state.with_store(move |s| s.sale_list(filter)).await?))
+}
+
+async fn sale_detail(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<impl IntoResponse, ApiError> {
+    let detail = state
+        .with_store(move |s| s.sale_detail(&id))
+        .await?
+        .ok_or_else(|| {
+            ApiError(
+                StatusCode::NOT_FOUND,
+                "판매 내역을 찾을 수 없습니다.".into(),
+                "not_found",
+            )
+        })?;
+    Ok(Json(detail))
+}
+
 async fn order_list(
     State(state): State<AppState>,
     input: Result<Query<OrderFilter>, QueryRejection>,
@@ -850,6 +879,7 @@ async fn static_asset(_headers: HeaderMap, request: Request<Body>) -> Response {
         || path == "/orders"
         || path == "/receipts"
         || path == "/productions"
+        || path == "/sales"
         || path == "/recipes"
         || path == "/recipes/new"
         || path
@@ -866,6 +896,9 @@ async fn static_asset(_headers: HeaderMap, request: Request<Body>) -> Response {
             .is_some_and(|id| uuid::Uuid::parse_str(id).is_ok())
         || path
             .strip_prefix("/productions/")
+            .is_some_and(|id| uuid::Uuid::parse_str(id).is_ok())
+        || path
+            .strip_prefix("/sales/")
             .is_some_and(|id| uuid::Uuid::parse_str(id).is_ok())
         || path.strip_prefix("/recipes/").is_some_and(|part| {
             uuid::Uuid::parse_str(part).is_ok()

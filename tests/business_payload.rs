@@ -232,3 +232,41 @@ fn production_drafts_preserve_incomplete_rows_and_close_every_nested_wire_bounda
         assert!(serde_json::from_value::<CreateBusinessDraft>(wrong).is_err());
     }
 }
+
+#[test]
+fn sale_drafts_preserve_zero_and_incomplete_counts_without_accepting_extra_input() {
+    for count in ["", "0", "1."] {
+        let mut value = input();
+        value["payload"] = json!({"kind":"sale","version":1,"data":{
+            "material_id":null,"material_version_id":null,"recipe_version_id":null,
+            "count":count,"note":"가상 판매\r\n확인 필요"
+        }});
+        let decoded: CreateBusinessDraft = serde_json::from_value(value.clone()).unwrap();
+        let normalized = normalize_business_payload(decoded.payload).unwrap();
+        assert_eq!(
+            normalized.kind(),
+            sunchang_hansang::business::BusinessKind::Sale
+        );
+        let normalized = serde_json::to_value(normalized).unwrap();
+        assert_eq!(normalized["data"]["count"], count);
+        assert_eq!(normalized["data"]["note"], "가상 판매\n확인 필요");
+        for path in ["/payload", "/payload/data"] {
+            let mut wrong = value.clone();
+            wrong
+                .pointer_mut(path)
+                .unwrap()
+                .as_object_mut()
+                .unwrap()
+                .insert("stock_quantity".into(), json!("0"));
+            assert!(serde_json::from_value::<CreateBusinessDraft>(wrong).is_err());
+        }
+        for (path, replacement) in [
+            ("/payload/version", json!(2)),
+            ("/payload/data/count", json!(0)),
+        ] {
+            let mut wrong = value.clone();
+            *wrong.pointer_mut(path).unwrap() = replacement;
+            assert!(serde_json::from_value::<CreateBusinessDraft>(wrong).is_err());
+        }
+    }
+}

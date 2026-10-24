@@ -7,5 +7,6 @@ pub mod production;
 pub mod purchase_order;
 pub mod receipt;
 pub mod recipe;
+pub mod sale;
 pub mod server;
 pub mod store;

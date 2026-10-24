@@ -285,3 +285,9 @@ a.material-row:hover { background: var(--soft); }
   .production-row { padding: 16px; }
   .production-result-columns, .production-draft-summary { grid-template-columns: 1fr; }
 }
+
+.sale-reference { margin: 16px 0; overflow-wrap: anywhere; }
+.sale-cost-snapshot { margin: 28px 0; padding-top: 20px; border-top: 1px solid var(--line); }
+.sale-cost-snapshot h3 { margin: 0 0 12px; }
+.sale-list li, .sale-totals dd { overflow-wrap: anywhere; }
+@media (max-width: 480px) { .sale-detail dl > div { grid-template-columns: minmax(0, 1fr); gap: 5px; } }

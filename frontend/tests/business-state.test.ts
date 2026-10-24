@@ -7,6 +7,7 @@ import * as vue from 'vue'
 import * as business from '../app/utils/business.ts'
 import { failureAction } from '../app/utils/catalog.ts'
 import { ApiError } from '../app/utils/api.ts'
+import { blankSaleDraft } from '../app/utils/sale.ts'
 import { blankProductionDraft, blankProductionOutput } from '../app/utils/production.ts'
 
 const recordId = '00000000-0000-4000-8000-000000000001'
@@ -285,4 +286,43 @@ test('explicit new input uses the freshly loaded state after returning from a pr
     h.requests[1]!.reject(new ApiError(503, 'uncertain', 'unavailable'))
     await sending
   } finally { nextScope.stop() }
+})
+
+
+test('sale correction lost create survives a fresh instance with the exact original target and body', async () => {
+  const h = harness(), scope = vue.effectScope()
+  const sale = blankSaleDraft(); Object.assign(sale.data, { material_id: recordId, material_version_id: headId, recipe_version_id: requestId, count: '0', note: '가상 정정' })
+  const seed = { ...initial, payload: sale, recordId: null, headId: null, corrects: headId }
+  try {
+    const editor = scope.run(() => h.create('new.sale.correction', seed, async () => null))!
+    const saving = editor.send('create'), original = JSON.stringify(h.requests[0]!.body)
+    h.requests[0]!.reject(new ApiError(503, 'uncertain', 'unavailable')); await saving
+    const fresh = harness(); for (const [key, value] of h.storage) fresh.storage.set(key, value)
+    const recovered = scope.run(() => fresh.create('new.sale.correction', seed, async () => null))!
+    assert.equal(recovered.payload.value.data.count, '0'); assert.equal(recovered.locked.value, true)
+    const retry = recovered.send('create'); assert.equal(JSON.stringify(fresh.requests[0]!.body), original)
+    assert.equal(JSON.parse(original).corrects_confirmation_id, headId)
+    fresh.requests[0]!.reject(new ApiError(503, 'uncertain', 'unavailable')); await retry
+    const different = harness(); for (const [key, value] of h.storage) different.storage.set(key, value)
+    const rejected = scope.run(() => different.create('new.sale.correction', { ...seed, corrects: epoch }, async () => null))!
+    assert.equal(rejected.pending.value, null)
+  } finally { scope.stop() }
+})
+
+test('sale count edit invalidates preview and confirmation retry preserves frozen preview state', async () => {
+  const h = harness(), scope = vue.effectScope(), sale = blankSaleDraft()
+  Object.assign(sale.data, { material_id: recordId, material_version_id: headId, recipe_version_id: requestId, count: '3' })
+  try {
+    const editor = scope.run(() => h.create(recordId, { ...initial, payload: sale }, async () => null))!
+    const showing = editor.showPreview(); h.requests[0]!.resolve({ record_id: recordId, head_id: headId, state: { epoch, revision: '9' }, can_confirm: true, issues: [], effect: { kind: 'sale' } }); await showing
+    editor.payload.value.data.count = '1'; assert.equal(editor.preview.value, null); assert.equal(editor.dirty.value, true)
+    assert.equal(await editor.send('confirm'), null)
+    editor.payload.value.data.count = '3'
+    const again = editor.showPreview(); h.requests[1]!.resolve({ record_id: recordId, head_id: headId, state: { epoch, revision: '10' }, can_confirm: true, issues: [], effect: { kind: 'sale' } }); await again
+    const confirming = editor.send('confirm'), original = JSON.stringify(h.requests[2]!.body)
+    h.requests[2]!.reject(new ApiError(503, 'uncertain', 'unavailable')); await confirming
+    const retry = editor.send('confirm'); assert.equal(JSON.stringify(h.requests[3]!.body), original); assert.equal(JSON.parse(original).meta.expected_revision, '10')
+    h.requests[3]!.resolve({ result: { item: { ...item, kind: 'sale', status: 'confirmed' }, head: { ...head, payload: sale, status: 'confirmed' }, issues: [] }, state: { epoch, revision: '11' } }); await retry
+    assert.equal(editor.status.value, 'confirmed'); assert.equal(editor.payload.value.data.recipe_version_id, requestId); assert.equal(editor.pending.value, null)
+  } finally { scope.stop() }
 })

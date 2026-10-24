@@ -19,9 +19,10 @@ mod production;
 mod purchase_order;
 mod receipt;
 mod recipe;
+mod sale;
 mod snapshot;
 
-const SCHEMA_VERSION: i64 = 8;
+const SCHEMA_VERSION: i64 = 9;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Material {
@@ -312,6 +313,7 @@ fn validate_schema(connection: &Connection) -> anyhow::Result<()> {
     holding::validate_holding_schema(connection)?;
     recipe::validate_recipe_schema(connection)?;
     production::validate_production_schema(connection)?;
+    sale::validate_sale_schema(connection)?;
     let violation: Option<String> = connection
         .query_row("PRAGMA foreign_key_check", [], |row| row.get(0))
         .optional()?;
@@ -393,6 +395,10 @@ fn migrate(connection: &mut Connection, starting_version: i64) -> anyhow::Result
     }
     if version == 7 {
         production::migrate_productions(&transaction)?;
+        version = 8;
+    }
+    if version == 8 {
+        sale::migrate_sales(&transaction)?;
     }
     validate_schema(&transaction)?;
     transaction.commit()?;

@@ -50,7 +50,7 @@ struct State {
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct RecipeVersion {
+pub(super) struct RecipeVersion {
     id: String,
     material_id: String,
     material_version_id: String,
@@ -79,7 +79,7 @@ struct ReferenceOutput {
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct RecipeLineRow {
+pub(super) struct RecipeLineRow {
     recipe_version_id: String,
     line: RecipeLine,
 }

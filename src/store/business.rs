@@ -1,5 +1,5 @@
 use super::{
-    Store, StoreError, catalog, production, purchase_order, receipt, snapshot, unavailable,
+    Store, StoreError, catalog, production, purchase_order, receipt, sale, snapshot, unavailable,
 };
 use crate::{
     business::*,
@@ -21,6 +21,7 @@ fn parse_kind(kind: &str) -> Result<BusinessKind, StoreError> {
         "purchase_order" => Ok(BusinessKind::PurchaseOrder),
         "receipt" => Ok(BusinessKind::Receipt),
         "production" => Ok(BusinessKind::Production),
+        "sale" => Ok(BusinessKind::Sale),
         _ => Err(unavailable("지원하지 않는 업무 종류입니다")),
     }
 }
@@ -30,6 +31,7 @@ fn kind_text(kind: BusinessKind) -> &'static str {
         BusinessKind::PurchaseOrder => "purchase_order",
         BusinessKind::Receipt => "receipt",
         BusinessKind::Production => "production",
+        BusinessKind::Sale => "sale",
     }
 }
 fn result_material_id(result: &BusinessResult) -> Option<&str> {
@@ -37,7 +39,18 @@ fn result_material_id(result: &BusinessResult) -> Option<&str> {
         BusinessResult::CatalogPrice { material_id, .. }
         | BusinessResult::PurchaseOrder { material_id, .. }
         | BusinessResult::Receipt { material_id, .. } => Some(material_id),
-        BusinessResult::Production { .. } => None,
+        BusinessResult::Production { .. } | BusinessResult::Sale { .. } => None,
+    }
+}
+fn same_correction_target(left: &BusinessResult, right: &BusinessResult) -> bool {
+    match (left, right) {
+        (BusinessResult::Sale { sale_id: a, .. }, BusinessResult::Sale { sale_id: b, .. }) => {
+            a == b
+        }
+        (BusinessResult::CatalogPrice { .. }, BusinessResult::CatalogPrice { .. }) => {
+            result_material_id(left) == result_material_id(right)
+        }
+        _ => false,
     }
 }
 
@@ -214,6 +227,7 @@ fn confirmation(
         BusinessKind::PurchaseOrder => purchase_order::result(connection,id)?,
         BusinessKind::Receipt => receipt::result(connection,id)?,
         BusinessKind::Production => production::result(connection,id)?,
+        BusinessKind::Sale => sale::result(connection,id)?,
     };
     Ok(Some(BusinessConfirmation {
         id: row.id,
@@ -260,9 +274,7 @@ fn chain(
             .ok_or_else(|| unavailable("정정 원기록 연결이 없습니다"))?;
         if let Some(previous) = events.last() {
             let previous: &BusinessConfirmation = previous;
-            if result_material_id(&previous.result).is_none()
-                || result_material_id(&previous.result) != result_material_id(&event.result)
-            {
+            if !same_correction_target(&previous.result, &event.result) {
                 return Err(unavailable("정정 대상 품목이 일치하지 않습니다"));
             }
         }
@@ -313,6 +325,9 @@ fn inspect(
         BusinessPayload::Receipt { data, .. } => receipt::inspect_receipt(connection, data, today),
         BusinessPayload::Production { data, .. } => {
             production::inspect_production(connection, data)
+        }
+        BusinessPayload::Sale { data, .. } => {
+            sale::inspect_sale(connection, data, record.corrects_confirmation_id.as_deref())
         }
     }
 }
@@ -506,6 +521,7 @@ fn detail(
         }
         BusinessPayload::Receipt { data, .. } => receipt::material_name(connection, data)?,
         BusinessPayload::Production { data, .. } => production::material_name(connection, data)?,
+        BusinessPayload::Sale { data, .. } => sale::material_name(connection, data)?,
     };
     let item = BusinessSummary {
         id: record.id,
@@ -577,6 +593,9 @@ fn check_target(
     payload: &BusinessPayload,
 ) -> Result<(), StoreError> {
     if let Some(target) = target {
+        if let BusinessPayload::Sale { data, .. } = payload {
+            return sale::check_correction(connection, target, data);
+        }
         let BusinessPayload::CatalogPrice { data, .. } = payload else {
             return Err(validation(
                 "주문 수정·취소에는 가격 정정 연결을 사용할 수 없습니다",
@@ -779,6 +798,7 @@ impl Store {
                     }
                     BusinessPayload::Receipt {data,..} => receipt::apply_receipt(tx,data,&event,seq,time,today)?,
                     BusinessPayload::Production {data,..} => production::apply_production(tx,data,&event,seq,time)?,
+                    BusinessPayload::Sale {data,..} => sale::apply_sale(tx,data,record.corrects_confirmation_id.as_deref(),&event)?,
                 }
                 if let Some(target) = record.corrects_confirmation_id {
                     tx.execute(

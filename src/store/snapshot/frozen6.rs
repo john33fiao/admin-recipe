@@ -96,7 +96,7 @@ enum Payload {
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct ReceiptDraft {
+pub(super) struct ReceiptDraft {
     source: ReceiptSourceDraft,
     quantity: String,
     unit: String,

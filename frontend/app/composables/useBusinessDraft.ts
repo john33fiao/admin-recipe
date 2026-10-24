@@ -14,7 +14,7 @@ export function useBusinessDraft<T extends BusinessPayload>(identity: string, in
   const pending = useState<BusinessPending | null>(`${key}.pending`, () => {
     try {
       const value = restoreBusinessPending(sessionStorage.getItem(pendingKey))
-      if (value && value.record_id === initial.recordId && (!('payload' in value.body) || sameBusinessTarget(initial.payload, value.body.payload))) return value
+      if (value && value.record_id === initial.recordId && (value.action !== 'create' || value.body.corrects_confirmation_id === initial.corrects) && (!('payload' in value.body) || sameBusinessTarget(initial.payload, value.body.payload))) return value
     } catch { /* Invalid pending data cannot change the kind or target. */ }
     return null
   })
@@ -117,7 +117,7 @@ export function useBusinessDraft<T extends BusinessPayload>(identity: string, in
       preview.value = null
       recovery.value = ''
       const confirmedPayload = response.result.head.payload
-      const confirmed = confirmedPayload.kind === 'catalog_price' ? '가격을 확정했습니다. 확정 기록과 가격을 함께 보관했습니다.' : confirmedPayload.kind === 'receipt' ? '입고를 확정했습니다. 실제 수량과 금액을 정산 기준에 반영했습니다.' : confirmedPayload.kind === 'production' ? '생산을 확정했습니다. 실제 투입과 결과, 원가 배분을 정산 기준에 반영했습니다.' : { place: '주문을 확정했습니다. 미입고 내역에서 확인할 수 있습니다.', revise: '주문 수정을 확정했습니다. 이전 주문 내용은 이력에 남아 있습니다.', cancel: '주문 취소를 확정했습니다. 보유 수량과 가격은 바뀌지 않았습니다.' }[confirmedPayload.data.action]
+      const confirmed = confirmedPayload.kind === 'catalog_price' ? '가격을 확정했습니다. 확정 기록과 가격을 함께 보관했습니다.' : confirmedPayload.kind === 'receipt' ? '입고를 확정했습니다. 실제 수량과 금액을 정산 기준에 반영했습니다.' : confirmedPayload.kind === 'production' ? '생산을 확정했습니다. 실제 투입과 결과, 원가 배분을 정산 기준에 반영했습니다.' : confirmedPayload.kind === 'sale' ? '판매를 확정했습니다. 당시 레시피와 원가를 보관했습니다. 재고는 차감하지 않았습니다.' : { place: '주문을 확정했습니다. 미입고 내역에서 확인할 수 있습니다.', revise: '주문 수정을 확정했습니다. 이전 주문 내용은 이력에 남아 있습니다.', cancel: '주문 취소를 확정했습니다. 보유 수량과 가격은 바뀌지 않았습니다.' }[confirmedPayload.data.action]
       notice.value = { create: '초안을 임시 저장했습니다. 앱을 다시 열어도 이어서 작성할 수 있습니다.', revise: '수정 내용을 임시 저장했습니다.', confirm: confirmed, archive: '초안을 보관했습니다. 이전 입력은 이력에 남아 있습니다.' }[request.action]
       completed.value += 1
       return response
