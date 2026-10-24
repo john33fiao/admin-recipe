@@ -13,11 +13,13 @@ use uuid::Uuid;
 
 mod business;
 mod catalog;
+mod holding;
 mod mutation;
 mod purchase_order;
+mod receipt;
 mod snapshot;
 
-const SCHEMA_VERSION: i64 = 5;
+const SCHEMA_VERSION: i64 = 6;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Material {
@@ -59,6 +61,7 @@ impl std::error::Error for StoreError {}
 pub struct Store {
     connection: Connection,
     root: PathBuf,
+    today: fn() -> chrono::NaiveDate,
     // Keep the lock file open for the entire connection lifetime. Never unlink
     // it: another process could otherwise lock a different inode at this path.
     _writer_lock: File,
@@ -77,6 +80,10 @@ struct Snapshot {
 
 impl Store {
     pub fn open(root: &Path) -> anyhow::Result<Self> {
+        Self::open_with_today(root, || chrono::Local::now().date_naive())
+    }
+
+    pub fn open_with_today(root: &Path, today: fn() -> chrono::NaiveDate) -> anyhow::Result<Self> {
         fs::create_dir_all(root).context("데이터 폴더를 만들 수 없습니다")?;
         let writer_lock = OpenOptions::new()
             .read(true)
@@ -124,6 +131,7 @@ impl Store {
         let mut store = Self {
             connection,
             root: root.to_owned(),
+            today,
             _writer_lock: writer_lock,
         };
         store
@@ -298,6 +306,8 @@ fn validate_schema(connection: &Connection) -> anyhow::Result<()> {
     catalog::validate_catalog_schema(connection)?;
     business::validate_business_schema(connection)?;
     purchase_order::validate_order_schema(connection)?;
+    receipt::validate_receipt_schema(connection)?;
+    holding::validate_holding_schema(connection)?;
     let violation: Option<String> = connection
         .query_row("PRAGMA foreign_key_check", [], |row| row.get(0))
         .optional()?;
@@ -367,6 +377,10 @@ fn migrate(connection: &mut Connection, starting_version: i64) -> anyhow::Result
     }
     if version == 4 {
         purchase_order::migrate_orders(&transaction)?;
+        version = 5;
+    }
+    if version == 5 {
+        receipt::migrate_receipts(&transaction)?;
     }
     validate_schema(&transaction)?;
     transaction.commit()?;

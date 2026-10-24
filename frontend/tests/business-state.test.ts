@@ -140,3 +140,83 @@ test('order actions reuse immutable preview retry and share completion across na
     } finally { nextScope.stop() }
   }
 })
+
+test('nested receipt edits invalidate preview while baseline and pending survive navigation unchanged', async () => {
+  const h = harness()
+  const receiptPayload = { kind: 'receipt', version: 1, data: { source: { kind: 'direct', material_id: recordId, material_version_id: headId }, quantity: '1', unit: 'kg', amount: '0', receipt_date: '2024-02-29', note: '', stock_effect: { kind: 'unreflected' } } }
+  const seed = { ...initial, payload: receiptPayload }
+  const firstScope = vue.effectScope()
+  const first = firstScope.run(() => h.create(recordId, seed, async () => null))!
+  const showing = first.showPreview()
+  h.requests[0]!.resolve({ record_id: recordId, head_id: headId, state: { epoch, revision: '9' }, can_confirm: true, issues: [], effect: { kind: 'receipt', after: { quantity: '1000', value: '0', source_id: null } } })
+  await showing
+  first.payload.value.data.source.material_version_id = requestId
+  assert.equal(first.dirty.value, true)
+  assert.equal(first.preview.value, null)
+  assert.equal(seed.payload.data.source.material_version_id, headId)
+  const saving = first.send('revise')
+  const original = JSON.stringify(h.requests[1]!.body)
+  first.payload.value.data.source.material_version_id = epoch
+  assert.equal(JSON.stringify(h.requests[1]!.body), original)
+  h.requests[1]!.reject(new ApiError(503, 'uncertain', 'unavailable'))
+  await saving
+  firstScope.stop()
+  const nextScope = vue.effectScope()
+  try {
+    const next = nextScope.run(() => h.create(recordId, seed, async () => null))!
+    const retry = next.send('revise')
+    assert.equal(JSON.stringify(h.requests[2]!.body), original)
+    const saved = JSON.parse(original).payload
+    h.requests[2]!.resolve({ result: { item: { ...item, kind: 'receipt' }, head: { ...head, payload: saved }, issues: [] }, state: { epoch, revision: '10' } })
+    await retry
+    assert.equal(next.dirty.value, false)
+    assert.equal(next.payload.value.data.source.material_version_id, requestId)
+    assert.equal(next.pending.value, null)
+  } finally { nextScope.stop() }
+})
+
+test('reconciliation-only edits are dirty and a recovered receipt request restores exact nested input', async () => {
+  const h = harness()
+  const payload = { kind: 'receipt', version: 1, data: { source: { kind: 'direct', material_id: recordId, material_version_id: headId }, quantity: '1.', unit: 'kg', amount: '', receipt_date: '2024-0', note: '', stock_effect: { kind: 'needs_reconciliation', basis_id: null, included_quantity: '' } } }
+  const seed = { ...initial, payload }
+  const scope = vue.effectScope()
+  try {
+    const first = scope.run(() => h.create(recordId, seed, async () => null))!
+    first.payload.value.data.stock_effect.included_quantity = '0.'
+    assert.equal(first.dirty.value, true)
+    assert.equal(payload.data.stock_effect.included_quantity, '')
+    const sending = first.send('revise')
+    const original = JSON.stringify(h.requests[0]!.body)
+    h.requests[0]!.reject(new ApiError(503, 'uncertain', 'unavailable'))
+    await sending
+    const fresh = harness()
+    fresh.storage.set(`sunchang.business.${recordId}.pending.v1`, h.storage.get(`sunchang.business.${recordId}.pending.v1`)!)
+    const recovered = scope.run(() => fresh.create(recordId, seed, async () => null))!
+    assert.equal(recovered.payload.value.data.stock_effect.included_quantity, '0.')
+    assert.equal(recovered.locked.value, true)
+    const retry = recovered.send('revise')
+    assert.equal(JSON.stringify(fresh.requests[0]!.body), original)
+    fresh.requests[0]!.reject(new ApiError(503, 'uncertain', 'unavailable'))
+    await retry
+  } finally { scope.stop() }
+})
+
+test('explicit new input uses the freshly loaded state after returning from a previous receipt', async () => {
+  const h = harness()
+  const seed = { ...initial, recordId: null, headId: null }
+  const firstScope = vue.effectScope()
+  const first = firstScope.run(() => h.create('new.direct', seed, async () => null))!
+  const saving = first.send('create')
+  h.requests[0]!.resolve({ result: { item, head, issues: [] }, state: { epoch, revision: '2' } })
+  await saving
+  firstScope.stop()
+  const nextScope = vue.effectScope()
+  try {
+    const next = nextScope.run(() => h.create('new.direct', { ...seed, state: { epoch, revision: '9' } }, async () => null))!
+    next.resetNew()
+    const sending = next.send('create')
+    assert.equal((h.requests[1]!.body as { meta: { expected_revision: string } }).meta.expected_revision, '9')
+    h.requests[1]!.reject(new ApiError(503, 'uncertain', 'unavailable'))
+    await sending
+  } finally { nextScope.stop() }
+})

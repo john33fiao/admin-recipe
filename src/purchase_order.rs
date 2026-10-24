@@ -13,6 +13,7 @@ pub enum OrderAction {
     Place,
     Revise,
     Cancel,
+    Receive,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -361,7 +362,8 @@ impl OrderForReceipt {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct OrderReceiptClosure {
     pub status: OrderStatus,
     pub order_id: Uuid,

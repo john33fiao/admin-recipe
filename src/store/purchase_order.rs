@@ -28,6 +28,7 @@ pub(super) fn action_text(action: OrderAction) -> &'static str {
         OrderAction::Place => "place",
         OrderAction::Revise => "revise",
         OrderAction::Cancel => "cancel",
+        OrderAction::Receive => "receive",
     }
 }
 fn status_text(status: OrderStatus) -> &'static str {
@@ -42,6 +43,7 @@ fn parse_action(value: &str) -> Result<OrderAction, StoreError> {
         "place" => Ok(OrderAction::Place),
         "revise" => Ok(OrderAction::Revise),
         "cancel" => Ok(OrderAction::Cancel),
+        "receive" => Ok(OrderAction::Receive),
         _ => Err(unavailable("지원하지 않는 주문 동작입니다")),
     }
 }
@@ -49,6 +51,7 @@ fn parse_status(value: &str) -> Result<OrderStatus, StoreError> {
     match value {
         "open" => Ok(OrderStatus::Open),
         "cancelled" => Ok(OrderStatus::Cancelled),
+        "received" => Ok(OrderStatus::Received),
         _ => Err(unavailable(
             "입고 연결이 없거나 지원하지 않는 주문 상태입니다",
         )),
@@ -78,7 +81,7 @@ pub(super) struct OrderSnapshotRows {
 const VERSION_COLUMNS: &str = "v.id,v.order_id,v.previous_version_id,v.confirmation_id,c.record_id,v.action,v.status,v.material_id,v.material_version_id,m.name,v.quantity_micros,v.unit,v.input_quantity,v.input_unit,v.supplier,v.expected_date,v.estimated_amount_micros,v.note,v.recorded_at,v.sequence";
 const VERSION_JOINS: &str = "FROM purchase_order_versions v JOIN business_confirmations c ON c.id=v.confirmation_id JOIN material_versions m ON m.id=v.material_version_id AND m.material_id=v.material_id";
 
-fn read_versions(
+pub(super) fn read_versions(
     connection: &Connection,
     order_id: Option<&str>,
     version_id: Option<&str>,
@@ -174,7 +177,10 @@ fn read_versions(
         )
         .collect()
 }
-fn current_version(connection: &Connection, id: &str) -> Result<Option<OrderVersion>, StoreError> {
+pub(super) fn current_version(
+    connection: &Connection,
+    id: &str,
+) -> Result<Option<OrderVersion>, StoreError> {
     let exists: bool = connection
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM purchase_orders WHERE id=?1)",
@@ -194,6 +200,7 @@ pub(super) fn validate_stored_version(version: &OrderVersion) -> Result<(), Stor
         (OrderAction::Place, OrderStatus::Open)
             | (OrderAction::Revise, OrderStatus::Open)
             | (OrderAction::Cancel, OrderStatus::Cancelled)
+            | (OrderAction::Receive, OrderStatus::Received)
     ) {
         return Err(unavailable(
             "주문 동작과 상태가 일치하지 않거나 입고 연결이 없습니다",

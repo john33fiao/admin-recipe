@@ -1,4 +1,4 @@
-use super::{Store, StoreError, catalog, purchase_order, snapshot, unavailable};
+use super::{Store, StoreError, catalog, purchase_order, receipt, snapshot, unavailable};
 use crate::{
     business::*,
     catalog::MutationMeta,
@@ -17,6 +17,7 @@ fn parse_kind(kind: &str) -> Result<BusinessKind, StoreError> {
     match kind {
         "catalog_price" => Ok(BusinessKind::CatalogPrice),
         "purchase_order" => Ok(BusinessKind::PurchaseOrder),
+        "receipt" => Ok(BusinessKind::Receipt),
         _ => Err(unavailable("지원하지 않는 업무 종류입니다")),
     }
 }
@@ -24,12 +25,14 @@ fn kind_text(kind: BusinessKind) -> &'static str {
     match kind {
         BusinessKind::CatalogPrice => "catalog_price",
         BusinessKind::PurchaseOrder => "purchase_order",
+        BusinessKind::Receipt => "receipt",
     }
 }
 fn result_material_id(result: &BusinessResult) -> &str {
     match result {
         BusinessResult::CatalogPrice { material_id, .. }
-        | BusinessResult::PurchaseOrder { material_id, .. } => material_id,
+        | BusinessResult::PurchaseOrder { material_id, .. }
+        | BusinessResult::Receipt { material_id, .. } => material_id,
     }
 }
 
@@ -204,6 +207,7 @@ fn confirmation(
     let result = match owner.kind {
         BusinessKind::CatalogPrice => connection.query_row("SELECT p.id,p.material_id,p.material_version_id FROM business_catalog_price_results r JOIN material_prices p ON p.id=r.price_id WHERE r.confirmation_id=?1",[id],|r|Ok(BusinessResult::CatalogPrice{price_id:r.get(0)?,material_id:r.get(1)?,material_version_id:r.get(2)?})).map_err(unavailable)?,
         BusinessKind::PurchaseOrder => purchase_order::result(connection,id)?,
+        BusinessKind::Receipt => receipt::result(connection,id)?,
     };
     Ok(Some(BusinessConfirmation {
         id: row.id,
@@ -291,12 +295,14 @@ fn inspect(
     connection: &Connection,
     record: &Record,
     head: &BusinessRevision,
+    today: chrono::NaiveDate,
 ) -> Result<(Vec<BusinessIssue>, Option<BusinessEffect>), StoreError> {
     match &head.payload {
         BusinessPayload::CatalogPrice { .. } => inspect_price(connection, record, head),
         BusinessPayload::PurchaseOrder { data, .. } => {
             purchase_order::inspect_order(connection, data)
         }
+        BusinessPayload::Receipt { data, .. } => receipt::inspect_receipt(connection, data, today),
     }
 }
 fn inspect_price(
@@ -455,7 +461,11 @@ fn inspect_price(
     };
     Ok((issues, Some(effect)))
 }
-fn detail(connection: &Connection, id: &str) -> Result<Option<BusinessDetail>, StoreError> {
+fn detail(
+    connection: &Connection,
+    id: &str,
+    today: chrono::NaiveDate,
+) -> Result<Option<BusinessDetail>, StoreError> {
     let Some(record) = record(connection, id)? else {
         return Ok(None);
     };
@@ -466,7 +476,7 @@ fn detail(connection: &Connection, id: &str) -> Result<Option<BusinessDetail>, S
         .or(record.corrects_confirmation_id.as_deref());
     let (confirmations, corrections) = chain(connection, seed)?;
     let issues = if head.status == BusinessStatus::Draft {
-        inspect(connection, &record, &head)?.0
+        inspect(connection, &record, &head, today)?.0
     } else {
         vec![]
     };
@@ -483,6 +493,7 @@ fn detail(connection: &Connection, id: &str) -> Result<Option<BusinessDetail>, S
         BusinessPayload::PurchaseOrder { data, .. } => {
             purchase_order::material_name(connection, data)?
         }
+        BusinessPayload::Receipt { data, .. } => receipt::material_name(connection, data)?,
     };
     let item = BusinessSummary {
         id: record.id,
@@ -507,9 +518,13 @@ fn detail(connection: &Connection, id: &str) -> Result<Option<BusinessDetail>, S
         state: catalog::state(connection)?,
     }))
 }
-fn write_result(connection: &Connection, id: &str) -> Result<BusinessWrite, StoreError> {
-    let detail =
-        detail(connection, id)?.ok_or_else(|| unavailable("저장한 업무를 찾을 수 없습니다"))?;
+fn write_result(
+    connection: &Connection,
+    id: &str,
+    today: chrono::NaiveDate,
+) -> Result<BusinessWrite, StoreError> {
+    let detail = detail(connection, id, today)?
+        .ok_or_else(|| unavailable("저장한 업무를 찾을 수 없습니다"))?;
     let confirmation = detail
         .confirmations
         .into_iter()
@@ -581,9 +596,10 @@ fn check_target(
 
 impl Store {
     pub fn business_list(&self, filter: BusinessFilter) -> Result<BusinessList, StoreError> {
+        let today = (self.today)();
         let mut items = vec![];
         for record in records(&self.connection)? {
-            let detail = detail(&self.connection, &record.id)?
+            let detail = detail(&self.connection, &record.id, today)?
                 .ok_or_else(|| unavailable("업무 기록이 없습니다"))?;
             let matches = match filter.status {
                 BusinessStatusFilter::All => true,
@@ -601,7 +617,11 @@ impl Store {
         })
     }
     pub fn business_detail(&self, id: &str) -> Result<Option<BusinessDetail>, StoreError> {
-        detail(&self.connection, &catalog::uuid(id, "업무 ID")?)
+        detail(
+            &self.connection,
+            &catalog::uuid(id, "업무 ID")?,
+            (self.today)(),
+        )
     }
     pub fn business_create(
         &mut self,
@@ -614,6 +634,7 @@ impl Store {
             .map(|id| catalog::uuid(&id, "정정 대상 ID"))
             .transpose()?;
         let payload = serde_json::to_string(&input).map_err(unavailable)?;
+        let today = (self.today)();
         self.mutate(
             Some(&meta), &meta.request_id, "business.create", &payload,
             move |tx, seq, time, state| {
@@ -626,7 +647,7 @@ impl Store {
                 ).map_err(unavailable)?;
                 append_revision(tx, &id, None, BusinessStatus::Draft, &input.payload, seq, time)?;
                 Ok(BusinessMutation {
-                    result: write_result(tx, &id)?,
+                    result: write_result(tx, &id, today)?,
                     state: state.clone(),
                 })
             },
@@ -642,6 +663,7 @@ impl Store {
         input.expected_head_id = catalog::uuid(&input.expected_head_id, "업무 버전 ID")?;
         input.payload = normalize_business_payload(input.payload).map_err(validation)?;
         let payload = serde_json::to_string(&(id.clone(), &input)).map_err(unavailable)?;
+        let today = (self.today)();
         self.mutate(
             Some(&meta),
             &meta.request_id,
@@ -677,7 +699,7 @@ impl Store {
                     time,
                 )?;
                 Ok(BusinessMutation {
-                    result: write_result(tx, &id)?,
+                    result: write_result(tx, &id, today)?,
                     state: state.clone(),
                 })
             },
@@ -691,7 +713,7 @@ impl Store {
         let id = catalog::uuid(id, "업무 ID")?;
         let expected = catalog::uuid(&input.expected_head_id, "업무 버전 ID")?;
         let (record, head) = required_draft(&self.connection, &id, &expected)?;
-        let (issues, effect) = inspect(&self.connection, &record, &head)?;
+        let (issues, effect) = inspect(&self.connection, &record, &head, (self.today)())?;
         Ok(BusinessPreview {
             record_id: id,
             head_id: head.id,
@@ -710,12 +732,13 @@ impl Store {
         let meta = normalize_meta(&mut input.meta)?;
         input.expected_head_id = catalog::uuid(&input.expected_head_id, "업무 버전 ID")?;
         let payload = serde_json::to_string(&(id.clone(), &input)).map_err(unavailable)?;
+        let today = (self.today)();
         self.mutate(
             Some(&meta), &meta.request_id, "business.confirm", &payload,
             move |tx, seq, time, state| {
                 let (record, head) = required_draft(tx, &id, &input.expected_head_id)?;
                 check_target(tx, record.corrects_confirmation_id.as_deref(), &head.payload)?;
-                let (issues, _) = inspect(tx, &record, &head)?;
+                let (issues, _) = inspect(tx, &record, &head, today)?;
                 if !issues.is_empty() {
                     let message = issues.iter().map(|i| i.message.as_str()).collect::<Vec<_>>().join("; ");
                     if issues.iter().any(|i| i.code == "stale_reference") {
@@ -742,6 +765,7 @@ impl Store {
                     BusinessPayload::PurchaseOrder { data, .. } => {
                         purchase_order::apply_order(tx,data,&event,seq,time)?;
                     }
+                    BusinessPayload::Receipt {data,..} => receipt::apply_receipt(tx,data,&event,seq,time,today)?,
                 }
                 if let Some(target) = record.corrects_confirmation_id {
                     tx.execute(
@@ -750,7 +774,7 @@ impl Store {
                     ).map_err(unavailable)?;
                 }
                 Ok(BusinessMutation {
-                    result: write_result(tx, &id)?,
+                    result: write_result(tx, &id, today)?,
                     state: state.clone(),
                 })
             },
@@ -765,6 +789,7 @@ impl Store {
         let meta = normalize_meta(&mut input.meta)?;
         input.expected_head_id = catalog::uuid(&input.expected_head_id, "업무 버전 ID")?;
         let payload = serde_json::to_string(&(id.clone(), &input)).map_err(unavailable)?;
+        let today = (self.today)();
         self.mutate(
             Some(&meta),
             &meta.request_id,
@@ -782,7 +807,7 @@ impl Store {
                     time,
                 )?;
                 Ok(BusinessMutation {
-                    result: write_result(tx, &id)?,
+                    result: write_result(tx, &id, today)?,
                     state: state.clone(),
                 })
             },
@@ -863,7 +888,7 @@ pub(super) fn validate_business_schema(connection: &Connection) -> anyhow::Resul
         .prepare("SELECT confirmation_id,price_id FROM business_catalog_price_results LIMIT 0")?;
     connection.prepare("SELECT target_confirmation_id,replacement_confirmation_id FROM business_corrections LIMIT 0")?;
     for record in records(connection)? {
-        detail(connection, &record.id)?;
+        detail(connection, &record.id, chrono::Local::now().date_naive())?;
     }
     revisions(connection, None)?;
     let invalid:i64=connection.query_row("SELECT COUNT(*) FROM business_confirmations c JOIN business_revisions r ON r.id=c.revision_id WHERE r.status<>'confirmed' OR c.sequence<>r.sequence",[],|r|r.get(0))?;

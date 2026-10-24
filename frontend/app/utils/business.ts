@@ -1,5 +1,6 @@
 import type { BusinessPayload, BusinessPending, BusinessPreview, CatalogPricePayload } from '../types/business.ts'
 import type { CatalogState } from '../types/material.ts'
+import { validReceiptShape, validateReceiptDraft } from './receipt.ts'
 
 export const businessStatuses = { draft: '임시 저장', confirmed: '확정', archived: '보관' }
 export const blankPriceDraft = (): CatalogPricePayload => ({ kind: 'catalog_price', version: 1, data: { material_id: null, material_version_id: null, quantity: '', unit: 'g', amount: '', note: '' } })
@@ -8,6 +9,7 @@ const object = (value: unknown): value is Record<string, unknown> => !!value && 
 const exact = (value: Record<string, unknown>, keys: string[]) => Object.keys(value).length === keys.length && keys.every(key => Object.hasOwn(value, key))
 
 export function validateBusinessDraft(payload: BusinessPayload): Record<string, string> {
+  if (payload.kind === 'receipt') return validateReceiptDraft(payload)
   const errors: Record<string, string> = {}
   const data = payload.data as unknown as Record<string, unknown>
   const ids = payload.kind === 'catalog_price' || payload.data.action === 'place' ? ['material_id', 'material_version_id'] : payload.data.action === 'revise' ? ['order_id', 'expected_order_version_id', 'material_version_id'] : ['order_id', 'expected_order_version_id']
@@ -20,20 +22,26 @@ export function validateBusinessDraft(payload: BusinessPayload): Record<string, 
   return errors
 }
 
-export function copyPayload<T extends BusinessPayload>(payload: T): T { return { kind: payload.kind, version: payload.version, data: { ...payload.data } } as T }
+export function copyPayload<T extends BusinessPayload>(payload: T): T {
+  const data = payload.kind === 'receipt' ? { ...payload.data, source: { ...payload.data.source }, stock_effect: { ...payload.data.stock_effect } } : { ...payload.data }
+  return { kind: payload.kind, version: payload.version, data } as T
+}
+function sameValue(a: unknown, b: unknown): boolean {
+  if (a === b) return true
+  return object(a) && object(b) && Object.keys(a).length === Object.keys(b).length && Object.keys(a).every(key => Object.hasOwn(b, key) && sameValue(a[key], b[key]))
+}
 export function samePayload(a: BusinessPayload, b: BusinessPayload) {
-  const left = a.data as unknown as Record<string, unknown>
-  const right = b.data as unknown as Record<string, unknown>
-  return a.kind === b.kind && a.version === b.version && Object.keys(left).length === Object.keys(right).length && Object.keys(left).every(key => left[key] === right[key])
+  return a.kind === b.kind && a.version === b.version && sameValue(a.data, b.data)
 }
 export function sameBusinessTarget(a: BusinessPayload, b: BusinessPayload) {
   if (a.kind !== b.kind) return false
-  if (a.kind === 'catalog_price' || b.kind === 'catalog_price') return true
+  if (a.kind !== 'purchase_order' || b.kind !== 'purchase_order') return true
   return a.data.action === b.data.action && (a.data.action === 'place' || (b.data.action !== 'place' && a.data.order_id === b.data.order_id))
 }
-export function businessLabel(payload: BusinessPayload) { return payload.kind === 'catalog_price' ? '사전 가격' : { place: '주문 작성', revise: '주문 수정', cancel: '주문 취소' }[payload.data.action] }
+export function businessLabel(payload: BusinessPayload) { return payload.kind === 'catalog_price' ? '사전 가격' : payload.kind === 'receipt' ? '실제 입고' : { place: '주문 작성', revise: '주문 수정', cancel: '주문 취소' }[payload.data.action] }
 export function businessInputText(payload: BusinessPayload) {
   if (payload.kind === 'catalog_price') return `${payload.data.quantity || '수량 미입력'} ${payload.data.unit || '단위 미입력'} / ${payload.data.amount === '' ? '금액 미입력' : `${payload.data.amount}원`}`
+  if (payload.kind === 'receipt') return `${payload.data.quantity || '수량 미입력'} ${payload.data.unit || '단위 미입력'} / 실제 금액 ${payload.data.amount.trim() === '' ? '미입력' : `${payload.data.amount}원`} / ${payload.data.receipt_date || '입고일 미입력'}`
   if (payload.data.action === 'cancel') return `주문 ${payload.data.order_id.slice(0, 8)} 취소`
   return `${payload.data.quantity || '수량 미입력'} ${payload.data.unit || '단위 미입력'} / 예상 금액 ${payload.data.estimated_amount.trim() === '' ? '미입력' : `${payload.data.estimated_amount}원`}`
 }
@@ -62,7 +70,8 @@ export function validBusinessPayload(value: unknown): value is BusinessPayload {
     else if (value.data.action === 'revise') { if (!exact(value.data, ['action', 'order_id', 'expected_order_version_id', ...common])) return false }
     else if (value.data.action === 'cancel') { if (!exact(value.data, ['action', 'order_id', 'expected_order_version_id', 'note'])) return false }
     else return false
-  } else return false
+  } else if (value.kind === 'receipt') { if (!validReceiptShape(value.data)) return false }
+  else return false
   return Object.keys(validateBusinessDraft(value as unknown as BusinessPayload)).length === 0
 }
 
@@ -75,7 +84,7 @@ export function restoreBusinessPending(raw: string | null): BusinessPending | nu
     if (!object(body.meta) || !exact(body.meta, ['request_id', 'epoch', 'expected_revision']) || !uuid(body.meta.request_id) || !uuid(body.meta.epoch) || typeof body.meta.expected_revision !== 'string' || !/^\d+$/.test(body.meta.expected_revision)) return null
     if (value.action === 'create') {
       if (value.record_id !== null || !exact(body, ['meta', 'payload', 'corrects_confirmation_id']) || !validBusinessPayload(body.payload) || !(body.corrects_confirmation_id === null || uuid(body.corrects_confirmation_id))) return null
-      if (body.payload.kind === 'purchase_order' && body.corrects_confirmation_id !== null) return null
+      if (body.payload.kind !== 'catalog_price' && body.corrects_confirmation_id !== null) return null
     } else {
       if (!uuid(value.record_id) || !uuid(body.expected_head_id)) return null
       if (value.action === 'revise') { if (!exact(body, ['meta', 'expected_head_id', 'payload']) || !validBusinessPayload(body.payload)) return null }

@@ -1,7 +1,9 @@
 pub mod business;
 pub mod catalog;
 pub mod domain;
+pub mod holding;
 pub mod lifecycle;
 pub mod purchase_order;
+pub mod receipt;
 pub mod server;
 pub mod store;

@@ -6,6 +6,7 @@ import { apiRequest } from '~/utils/api'
 import { blankPriceDraft, businessStatuses, copyPayload } from '~/utils/business'
 import { formatCreatedAt } from '~/utils/material'
 import { blankOrderDraft, orderActionDraft, orderDraftIdentity } from '~/utils/purchase-order'
+import { blankReceiptDraft } from '~/utils/receipt'
 
 const route = useRoute()
 const connection = useConnection()
@@ -38,7 +39,21 @@ async function loadSeed() {
   try {
     let payload: BusinessPayload = blankPriceDraft()
     let nextIdentity = `new.${corrects.value ?? (typeof route.query.material === 'string' ? route.query.material : 'price')}`
-    if (route.query.kind === 'purchase_order') {
+    if (route.query.kind === 'receipt') {
+      const receipt = blankReceiptDraft()
+      if (typeof route.query.order === 'string') {
+        const order = await apiRequest<OrderDetail>(`/api/orders/${encodeURIComponent(route.query.order)}`)
+        const material = await apiRequest<MaterialDetail>(`/api/materials/${encodeURIComponent(order.item.material_id)}`)
+        receipt.data.source = { kind: 'order', order_id: order.item.id, expected_order_version_id: order.head.id, material_version_id: material.version_id }
+        receipt.data.unit = order.head.input_unit
+      } else if (typeof route.query.material === 'string') {
+        const material = await apiRequest<MaterialDetail>(`/api/materials/${encodeURIComponent(route.query.material)}`)
+        receipt.data.source = { kind: 'direct', material_id: material.id, material_version_id: material.version_id }
+        receipt.data.unit = material.unit
+      }
+      payload = receipt
+      nextIdentity = `new.receipt.${typeof route.query.order === 'string' ? `order.${route.query.order}` : typeof route.query.material === 'string' ? `material.${route.query.material}` : 'direct'}`
+    } else if (route.query.kind === 'purchase_order') {
       if (route.query.action === 'revise' || route.query.action === 'cancel') {
         if (typeof route.query.order !== 'string') throw new Error('missing-order')
         const order = await apiRequest<OrderDetail>(`/api/orders/${encodeURIComponent(route.query.order)}`)
@@ -66,19 +81,20 @@ useHead({ title: '업무 기록 | 순창한상' })
 </script>
 
 <template>
-  <div class="page-heading"><div><h1>업무 기록</h1><p>작성 중인 가격과 발주를 임시 저장하고, 확인한 내용을 확정하세요.</p></div><div class="button-row"><NuxtLink class="secondary-link" to="/business">가격 초안 작성</NuxtLink><NuxtLink class="secondary-link" to="/business?kind=purchase_order&amp;action=place">주문 초안 작성</NuxtLink></div></div>
+  <div class="page-heading"><div><h1>업무 기록</h1><p>작성 중인 가격·발주·입고를 임시 저장하고, 확인한 내용을 확정하세요.</p></div><div class="button-row"><NuxtLink class="secondary-link" to="/business">가격 초안 작성</NuxtLink><NuxtLink class="secondary-link" to="/business?kind=purchase_order&amp;action=place">주문 초안 작성</NuxtLink><NuxtLink class="secondary-link" to="/business?kind=receipt">직접 입고 초안</NuxtLink></div></div>
   <p v-if="seedFailure" class="notice warning" role="alert">{{ seedFailure }} <NuxtLink to="/business">새 가격 초안 작성</NuxtLink></p>
   <div class="business-workspace">
     <BusinessPriceEditor v-if="seed?.kind === 'catalog_price' && list" :key="identity" :identity="identity" :initial="{ payload: seed, state: list.state, recordId: null, headId: null, status: 'draft', corrects, issues: [] }" :refresh="load" />
     <BusinessOrderEditor v-else-if="seed?.kind === 'purchase_order' && list" :key="identity" :identity="identity" :initial="{ payload: seed, state: list.state, recordId: null, headId: null, status: 'draft', corrects: null, issues: [] }" :refresh="load" />
+    <BusinessReceiptEditor v-else-if="seed?.kind === 'receipt' && list" :key="identity" :identity="identity" :initial="{ payload: seed, state: list.state, recordId: null, headId: null, status: 'draft', corrects: null, issues: [] }" :refresh="load" />
     <section class="business-list-panel" aria-labelledby="business-list-title" :aria-busy="loading">
       <div class="list-heading"><h2 id="business-list-title">저장된 업무</h2><button class="text-button" type="button" :disabled="loading || connection !== 'connected'" @click="load">다시 불러오기</button></div>
       <div class="field"><label for="business-filter">업무 상태</label><select id="business-filter" v-model="filter" :disabled="connection !== 'connected'"><option value="draft">임시 저장</option><option value="confirmed">확정</option><option value="archived">보관</option><option value="all">전체</option></select></div>
-      <div class="field"><label for="business-kind">업무 종류</label><select id="business-kind" v-model="kind" :disabled="connection !== 'connected'"><option value="">전체</option><option value="catalog_price">사전 가격</option><option value="purchase_order">발주 업무</option></select></div>
+      <div class="field"><label for="business-kind">업무 종류</label><select id="business-kind" v-model="kind" :disabled="connection !== 'connected'"><option value="">전체</option><option value="catalog_price">사전 가격</option><option value="purchase_order">발주 업무</option><option value="receipt">실제 입고</option></select></div>
       <p v-if="failure" class="notice warning" role="alert">{{ failure }}</p>
       <div v-if="!list" class="empty-state"><h3>업무 기록을 불러오고 있습니다</h3><p>앱에 연결되면 저장된 초안을 확인할 수 있습니다.</p></div>
       <div v-else-if="!list.items.length" class="empty-state"><h3>이 상태의 업무가 없습니다</h3><p>초안을 임시 저장하면 여기에서 이어서 작성할 수 있습니다.</p></div>
-      <ul v-else class="business-list"><li v-for="item in list.items" :key="item.id"><NuxtLink :to="`/business/${item.id}`"><div><strong>{{ item.material_name ?? '재료 확인 필요' }}</strong><span class="status-label">{{ businessStatuses[item.status] }}</span></div><p>{{ item.kind === 'purchase_order' ? '발주 업무' : item.corrects_confirmation_id ? '가격 정정' : '사전 가격' }} · {{ item.id.slice(0, 8) }}</p><p v-if="item.issue_count" class="business-needs-input">입력 필요 {{ item.issue_count }}개</p><time>{{ formatCreatedAt(item.updated_at) }} 수정</time></NuxtLink></li></ul>
+      <ul v-else class="business-list"><li v-for="item in list.items" :key="item.id"><NuxtLink :to="`/business/${item.id}`"><div><strong>{{ item.material_name ?? '재료 확인 필요' }}</strong><span class="status-label">{{ businessStatuses[item.status] }}</span></div><p>{{ item.kind === 'purchase_order' ? '발주 업무' : item.kind === 'receipt' ? '실제 입고' : item.corrects_confirmation_id ? '가격 정정' : '사전 가격' }} · {{ item.id.slice(0, 8) }}</p><p v-if="item.issue_count" class="business-needs-input">입력 필요 {{ item.issue_count }}개</p><time>{{ formatCreatedAt(item.updated_at) }} 수정</time></NuxtLink></li></ul>
     </section>
   </div>
 </template>

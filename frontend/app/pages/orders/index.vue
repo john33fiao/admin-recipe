@@ -27,7 +27,7 @@ useHead({ title: '발주 내역 | 순창한상' })
   <div class="page-heading"><div><h1>발주 내역</h1><p>확정한 주문의 진행 상태와 변경 이력을 확인합니다.</p></div><NuxtLink class="primary-link" to="/business?kind=purchase_order&amp;action=place">주문 초안 작성</NuxtLink></div>
   <section class="order-list-panel" aria-labelledby="order-list-title" :aria-busy="loading">
     <div class="list-heading"><h2 id="order-list-title">주문 목록</h2><button class="text-button" type="button" :disabled="loading || connection !== 'connected'" @click="load">다시 불러오기</button></div>
-    <div class="field order-filter"><label for="order-status">주문 상태</label><select id="order-status" v-model="status" :disabled="connection !== 'connected'"><option value="open">미입고</option><option value="cancelled">취소</option><option value="all">전체</option></select></div>
+    <div class="field order-filter"><label for="order-status">주문 상태</label><select id="order-status" v-model="status" :disabled="connection !== 'connected'"><option value="open">미입고</option><option value="received">입고 완료</option><option value="cancelled">취소</option><option value="all">전체</option></select></div>
     <p v-if="failure" class="notice warning" role="alert">{{ failure }}</p>
     <div v-else-if="loading && !list" class="empty-state"><h3>발주 내역을 불러오고 있습니다</h3></div>
     <div v-else-if="list && !list.items.length" class="empty-state"><h3>{{ status === 'open' ? '미입고 주문이 없습니다' : '이 상태의 주문이 없습니다' }}</h3><p>주문 초안을 저장하고 확정하면 발주 내역에 표시됩니다.</p><NuxtLink to="/business">작성 중인 업무 확인</NuxtLink></div>

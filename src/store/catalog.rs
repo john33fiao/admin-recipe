@@ -3,7 +3,7 @@ use super::{
 };
 use crate::{
     catalog::*,
-    domain::{HoldingBasis, Money, Quantity, Unit, UnitPrice, resolve_price},
+    domain::{Money, Quantity, Unit, UnitPrice},
 };
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use serde::{Serialize, de::DeserializeOwned};
@@ -189,17 +189,11 @@ fn summary(
             |r| r.get(0),
         )
         .map_err(unavailable)?;
-    let latest = prices(connection, Some(&version.material_id))?.pop();
-    let preregistered = latest
-        .map(|p| {
-            UnitPrice::new(
-                Money::parse(&p.amount).map_err(unavailable)?,
-                Quantity::parse(&p.quantity).map_err(unavailable)?,
-                p.id,
-            )
-            .map_err(unavailable)
-        })
-        .transpose()?;
+    let price = super::holding::price(
+        connection,
+        &version.material_id,
+        registered_price(connection, &version.material_id)?,
+    )?;
     Ok(MaterialSummary {
         id: version.material_id,
         version_id: version.id,
@@ -212,8 +206,25 @@ fn summary(
         archived: version.archived,
         created_at,
         updated_at: version.recorded_at,
-        price: resolve_price(HoldingBasis::NotEstablished, None, preregistered),
+        price,
     })
+}
+
+pub(super) fn registered_price(
+    connection: &Connection,
+    material_id: &str,
+) -> Result<Option<UnitPrice>, StoreError> {
+    prices(connection, Some(material_id))?
+        .pop()
+        .map(|p| {
+            UnitPrice::new(
+                Money::parse(&p.amount).map_err(unavailable)?,
+                Quantity::parse(&p.quantity).map_err(unavailable)?,
+                p.id,
+            )
+            .map_err(unavailable)
+        })
+        .transpose()
 }
 
 fn required_version(

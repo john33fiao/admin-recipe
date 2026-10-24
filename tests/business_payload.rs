@@ -144,3 +144,42 @@ fn original_price_result_and_preview_wire_bytes_survive_the_kind_extension() {
     let parsed: BusinessEffect = serde_json::from_str(effect).unwrap();
     assert_eq!(serde_json::to_string(&parsed).unwrap(), effect);
 }
+
+#[test]
+fn receipt_nested_sources_and_stock_effects_preserve_unfinished_inputs_and_reject_mixed_fields() {
+    for source in [
+        json!({"kind":"direct","material_id":null,"material_version_id":null}),
+        json!({"kind":"order","order_id":null,"expected_order_version_id":null,"material_version_id":null}),
+    ] {
+        for stock_effect in [
+            json!({"kind":"unreflected"}),
+            json!({"kind":"needs_reconciliation","basis_id":null,"included_quantity":"1."}),
+        ] {
+            let mut value = input();
+            value["payload"] = json!({"kind":"receipt","version":1,"data":{
+                "source":source,"stock_effect":stock_effect,"quantity":"1.","unit":"kg",
+                "amount":"","receipt_date":"2026-","note":"가상 입고\r\n확인 필요"
+            }});
+            let decoded: CreateBusinessDraft = serde_json::from_value(value.clone()).unwrap();
+            let normalized = normalize_business_payload(decoded.payload).unwrap();
+            let output = serde_json::to_value(normalized).unwrap();
+            assert_eq!(output["data"]["quantity"], "1.");
+            assert_eq!(output["data"]["amount"], "");
+            assert_eq!(output["data"]["note"], "가상 입고\n확인 필요");
+            for key in ["source", "stock_effect"] {
+                let mut bad = value.clone();
+                bad["payload"]["data"][key]["extra"] = json!(true);
+                assert!(serde_json::from_value::<CreateBusinessDraft>(bad).is_err());
+            }
+            let mut bad = value.clone();
+            bad["payload"]["data"]["amount"] = json!(0);
+            assert!(serde_json::from_value::<CreateBusinessDraft>(bad).is_err());
+            let mut bad = value.clone();
+            bad["payload"]["version"] = json!(2);
+            assert!(serde_json::from_value::<CreateBusinessDraft>(bad).is_err());
+            let mut bad = value.clone();
+            bad["payload"]["data"]["source"]["kind"] = json!("automatic");
+            assert!(serde_json::from_value::<CreateBusinessDraft>(bad).is_err());
+        }
+    }
+}

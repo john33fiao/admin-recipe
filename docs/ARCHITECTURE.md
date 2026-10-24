@@ -52,7 +52,9 @@ heartbeat는 복수 연결·재연결 유예·관측 공백을 구분하고 수�
 | `src/lifecycle.rs` | 복수 연결·만료·재연결·초기 대기·관측 공백의 수명 상태 |
 | `src/store.rs`, `src/store/` | 단일 작성자 잠금·스키마, catalog/business 저장, 공통 mutation·snapshot, JSON 발행/복구 |
 | `src/business.rs` | 업무 입력·초안/확정/정정 DTO와 엄격한 종류/버전/구조 검증 |
-| `src/purchase_order.rs`, `src/store/purchase_order.rs` | 발주 DTO·단위/날짜 검증, 주문 버전/head·수정/취소와 순수 입고 종료 계약 |
+| `src/purchase_order.rs`, `src/store/purchase_order.rs` | 발주 DTO·단위/날짜 검증, 주문 버전/head·수정/취소와 입고 종료 계약 |
+| `src/receipt.rs`, `src/store/receipt.rs` | 실제 입고 DTO·날짜·직접/주문 연결·확정과 실제 주문 종료/참조 검증 |
+| `src/holding.rs`, `src/store/holding.rs` | 관측/정산 기준·확정 변동, 보유 수량/가치 버전과 현재 평균·마지막 단가 |
 | `src/store/catalog.rs`, `src/catalog.rs` | 품목 버전·사전 가격·검색·아카이브와 요청 응답 보존·catalog DTO |
 | `src/domain/` | 6자리 고정소수 수량/금액·단위 환산·가격 출처 선택 |
 | `frontend/app/` | 한국어 재료 등록·목록·상세·연결 안내·실패 요청 재시도 |
@@ -68,9 +70,13 @@ T-005는 스키마 v4·JSON 형식 v2에 업무 원본·입력 revision/head·�
 
 옛 v1/schema1~2·v2/schema3~4는 각각 정해진 필수 필드를 검증한다. 마이그레이션 원 DB보다 미래인 snapshot, 누락된 업무 컬렉션과 미지원 입력 종류/버전은 거절한다. 이전 UUID·epoch/revision·응답·JSON 바이트를 보존하며, catalog 변경도 업무를 포함한 전체 snapshot을 남긴다. [T-005 계획](tickets/T-005-plan.md)과 [검증 기록](tickets/T-005-verification.md)에 기존 v3 fixture·발행 실패·원자성·UI 재시작과 후속 통합 경계를 기록한다.
 
-T-006의 현재 writer는 스키마 v5·JSON 형식 v2다. `purchase_orders`·불변 `purchase_order_versions`·현재 `purchase_order_heads`를 추가하고 공통 business 명령에 엄격한 `purchase_order` 입력을 연결한다. 주문 진행 상태와 업무 초안/확정 상태는 구별한다. 새 주문·수정·취소는 주문 버전, 확정 결과, 원요청 응답과 전체 snapshot을 같은 트랜잭션에 기록하며 재고·가격 효과를 만들지 않는다. 기존 가격의 요청·결과 JSON 외형과 schema4 reader는 고정한다. 주문의 같은 품목 수정·취소는 새 업무 기록으로 남고, 오래된 주문 head로 확정할 수 없다.
+T-006은 스키마 v5·JSON 형식 v2에 `purchase_orders`·불변 `purchase_order_versions`·현재 `purchase_order_heads`를 추가하고 공통 business 명령에 엄격한 `purchase_order` 입력을 연결했다. 주문 진행 상태와 업무 초안/확정 상태는 구별한다. 새 주문·수정·취소는 주문 버전, 확정 결과, 원요청 응답과 전체 snapshot을 같은 트랜잭션에 기록하며 재고·가격 효과를 만들지 않는다. 기존 가격의 요청·결과 JSON 외형과 schema4 reader는 고정한다. 주문의 같은 품목 수정·취소는 새 업무 기록으로 남고, 오래된 주문 head로 확정할 수 없다.
 
-입고 한 번으로 종료하는 계약은 최초 주문량·현재 주문량·실입고량·차이와 참조 버전을 보존한다. T-006에는 순수 계산만 있고 실제 입고/재고 쓰기는 없다. schema5의 저장 상태는 미입고·취소만 허용하며 실제 `received` 저장은 T-007에서 입고와 같은 트랜잭션에 연결한다. [T-006 계획](tickets/T-006-plan.md)과 [검증 기록](tickets/T-006-verification.md)에 구현·검증 상태를 구분한다.
+입고 한 번으로 종료하는 계약은 최초 주문량·현재 주문량·실입고량·차이와 참조 버전을 보존한다. T-006은 순수 계산을 제공했고 T-007이 실제 입고/보유 쓰기를 연결했다. frozen schema5는 미입고·취소만 허용한다. 현재 schema6의 `received`는 실제 입고·확정과 같은 트랜잭션에서 만들며 수량 차이와 원주문 버전·입고 참조를 검증한다. [T-006 계획](tickets/T-006-plan.md)과 [검증 기록](tickets/T-006-verification.md)에 당시 구현 경계를 보존한다.
+
+T-007의 현재 writer는 스키마 v6·JSON v2다. `receipts`·불변 `holding_versions`·현재 `holding_heads`·`order_receipt_closures`를 추가한다. 첫 미포함 입고가 입고 기준을 만들고 이후 확정 입고의 수량/가치를 더한다. 입고는 실제 관측을 만들지 않으며 기존 재료를 확인한 0 재고로 바꾸지 않는다. `HoldingInput`의 현재 Q/V 미리보기와 정확한 시작 기준 이후 seq를 배타적으로 적용하는 조회를 구분하고 마지막 관측을 보존한다. 실제 DB의 관측 writer는 T-010이며 이 계약은 가상 관측으로 검증한다.
+
+직접/주문 연결 입고는 DB 초안·미리보기·확정을 사용한다. 입고일은 서버의 현지 오늘보다 미래일 수 없고 자동 UTC 입력 시각과 별도다. 이미 실사에 포함됐거나 포함 여부가 불확실하면 보정 대기 초안으로 남기고 수량을 더하지 않는다. 현재 평균 단가는 Q/V에서 계산하며 사전 가격 이력을 덮어쓰지 않는다. 현재 보유·마지막 유효 단가·입고 전 사전 가격의 우선순위와 미확인/0/0원을 구분한다. 입고·보유·주문 종료·확정·원요청·전체 JSON은 같은 트랜잭션이다. schema5 주문 관계를 보존·교체해 상태를 확장하고 이전 요청/응답 및 JSON 원문은 재작성하지 않는다. [T-007 계획](tickets/T-007-plan.md)과 [검증 기록](tickets/T-007-verification.md)에 실제 검증과 후속 경계를 기록한다.
 
 ## 남은 구현 설계
 
@@ -79,7 +85,7 @@ T-006의 현재 writer는 스키마 v5·JSON 형식 v2다. `purchase_orders`·�
 | 재고·소모 | 품목별 실사 구간·확정 변동·판매 개수 배분·미배분과 정정 참조 (T-002·T-005·T-010~T-012) |
 | 원가 | 보유/마지막/사전 가격·0원, 명시 폐기·평균 단가 반품·여러 결과물·정밀도·보정 (T-002·T-004·T-008·T-011·T-013) |
 | 메뉴 | 복제 시 독립성·이름 충돌 처리, 메뉴별 재료 구성과 사용량 |
-| 저장 | 재료·가격·발주 업무 초안/확정·JSON 기록/복구. 실제 입고 등 후속 업무 효과·정식 이전 버전별 회귀 검증 |
+| 저장 | 재료·가격·발주·입고 업무 초안/확정·보유·JSON 기록/복구. 생산·판매·실사 등 후속 업무 효과·정식 이전 버전별 회귀 검증 |
 | 복원·이동 | 선택 상태 전체 복원, 사진·JSON·DB 정합성. OS 간 이동 지원 목표는 유지하며 실제 데이터 왕복 검증은 백로그 |
 | 설치·실행 | Windows·macOS 빌드·UI 내장·브라우저 열기·heartbeat 안전 종료, 수동 교체·바이너리 기준 경로 처리 |
 | 서버 전환 | 전환 조건·환경·계정·권한·이관 절차 |

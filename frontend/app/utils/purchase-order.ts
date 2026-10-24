@@ -2,7 +2,7 @@ import type { OrderDetail, OrderPayload } from '../types/purchase-order.ts'
 import { restoreBusinessPending, validBusinessPayload } from './business.ts'
 
 export const orderStatuses = { open: '미입고', cancelled: '취소', received: '입고 완료' }
-export const orderActions = { place: '주문 작성', revise: '주문 수정', cancel: '주문 취소' }
+export const orderActions = { place: '주문 작성', revise: '주문 수정', cancel: '주문 취소', receive: '입고 확정' }
 export const blankOrderDraft = (): OrderPayload => ({ kind: 'purchase_order', version: 1, data: { action: 'place', material_id: null, material_version_id: null, quantity: '', unit: 'kg', supplier: '', expected_date: '', estimated_amount: '', note: '' } })
 export function orderActionDraft(order: OrderDetail, action: 'revise' | 'cancel'): OrderPayload {
   const target = { order_id: order.item.id, expected_order_version_id: order.head.id }

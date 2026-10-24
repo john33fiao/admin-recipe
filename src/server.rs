@@ -9,6 +9,7 @@ use crate::{
     },
     lifecycle::{Lifecycle, Policy},
     purchase_order::OrderFilter,
+    receipt::ReceiptFilter,
     store::{CreateMaterial, Store, StoreError},
 };
 use axum::{
@@ -202,6 +203,9 @@ pub fn router(state: AppState) -> Router {
         .route("/api/business/{id}/archive", post(business_archive))
         .route("/api/orders", get(order_list))
         .route("/api/orders/{id}", get(order_detail))
+        .route("/api/receipts", get(receipt_list))
+        .route("/api/receipts/{id}", get(receipt_detail))
+        .route("/api/holdings/{id}", get(holding_detail))
         .route("/api/heartbeat", get(heartbeat))
         .fallback(static_asset)
         .layer(DefaultBodyLimit::max(16 * 1024))
@@ -514,6 +518,51 @@ async fn order_detail(
     Ok(Json(detail))
 }
 
+async fn receipt_list(
+    State(state): State<AppState>,
+    input: Result<Query<ReceiptFilter>, QueryRejection>,
+) -> Result<impl IntoResponse, ApiError> {
+    let Query(filter) = input
+        .map_err(|error| ApiError(StatusCode::BAD_REQUEST, error.body_text(), "validation"))?;
+    Ok(Json(
+        state.with_store(move |s| s.receipt_list(filter)).await?,
+    ))
+}
+
+async fn receipt_detail(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<impl IntoResponse, ApiError> {
+    let detail = state
+        .with_store(move |s| s.receipt_detail(&id))
+        .await?
+        .ok_or_else(|| {
+            ApiError(
+                StatusCode::NOT_FOUND,
+                "입고 내역을 찾을 수 없습니다.".into(),
+                "not_found",
+            )
+        })?;
+    Ok(Json(detail))
+}
+
+async fn holding_detail(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<impl IntoResponse, ApiError> {
+    let detail = state
+        .with_store(move |s| s.holding_detail(&id))
+        .await?
+        .ok_or_else(|| {
+            ApiError(
+                StatusCode::NOT_FOUND,
+                "재료를 찾을 수 없습니다.".into(),
+                "not_found",
+            )
+        })?;
+    Ok(Json(detail))
+}
+
 struct SocketGuard(AppState);
 impl Drop for SocketGuard {
     fn drop(&mut self) {
@@ -579,6 +628,7 @@ async fn static_asset(_headers: HeaderMap, request: Request<Body>) -> Response {
         || path == "/materials"
         || path == "/business"
         || path == "/orders"
+        || path == "/receipts"
         || path
             .strip_prefix("/materials/")
             .is_some_and(|id| uuid::Uuid::parse_str(id).is_ok())
@@ -587,6 +637,9 @@ async fn static_asset(_headers: HeaderMap, request: Request<Body>) -> Response {
             .is_some_and(|id| uuid::Uuid::parse_str(id).is_ok())
         || path
             .strip_prefix("/orders/")
+            .is_some_and(|id| uuid::Uuid::parse_str(id).is_ok())
+        || path
+            .strip_prefix("/receipts/")
             .is_some_and(|id| uuid::Uuid::parse_str(id).is_ok());
     let asset_path = if spa_route {
         "index.html"

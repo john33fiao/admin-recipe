@@ -2,7 +2,9 @@ pub use crate::purchase_order::DraftOrderActionV1;
 use crate::{
     catalog::{CatalogState, MaterialPriceVersion, MutationMeta},
     domain::DomainError,
+    holding::{HoldingAmounts, HoldingBasisRef, HoldingObservation},
     purchase_order::{OrderAction, OrderProposal, OrderVersion, normalize_order_draft},
+    receipt::{DraftReceiptV1, OrderReceiptPreview, normalize_receipt_draft},
 };
 use serde::{Deserialize, Deserializer, Serialize, de::Error};
 use uuid::Uuid;
@@ -12,6 +14,7 @@ use uuid::Uuid;
 pub enum BusinessKind {
     CatalogPrice,
     PurchaseOrder,
+    Receipt,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -78,6 +81,11 @@ pub enum BusinessPayload {
         version: u32,
         data: DraftOrderActionV1,
     },
+    Receipt {
+        #[serde(deserialize_with = "payload_version")]
+        version: u32,
+        data: DraftReceiptV1,
+    },
 }
 
 impl BusinessPayload {
@@ -85,11 +93,14 @@ impl BusinessPayload {
         match self {
             Self::CatalogPrice { .. } => BusinessKind::CatalogPrice,
             Self::PurchaseOrder { .. } => BusinessKind::PurchaseOrder,
+            Self::Receipt { .. } => BusinessKind::Receipt,
         }
     }
     pub fn version(&self) -> u32 {
         match self {
-            Self::CatalogPrice { version, .. } | Self::PurchaseOrder { version, .. } => *version,
+            Self::CatalogPrice { version, .. }
+            | Self::PurchaseOrder { version, .. }
+            | Self::Receipt { version, .. } => *version,
         }
     }
 }
@@ -116,6 +127,7 @@ pub fn normalize_business_payload(
     match &mut payload {
         BusinessPayload::CatalogPrice { data, .. } => normalize_price_draft(data)?,
         BusinessPayload::PurchaseOrder { data, .. } => normalize_order_draft(data)?,
+        BusinessPayload::Receipt { data, .. } => normalize_receipt_draft(data)?,
     }
     Ok(payload)
 }
@@ -231,6 +243,14 @@ pub enum BusinessResult {
         material_id: String,
         material_version_id: String,
     },
+    Receipt {
+        receipt_id: String,
+        holding_version_id: String,
+        material_id: String,
+        material_version_id: String,
+        order_id: Option<String>,
+        order_version_id: Option<String>,
+    },
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -313,6 +333,22 @@ pub enum BusinessEffect {
         order_id: Option<String>,
         before: Option<OrderVersion>,
         after: OrderProposal,
+    },
+    Receipt {
+        material_id: String,
+        material_version_id: String,
+        quantity: String,
+        amount: String,
+        unit: String,
+        input_quantity: String,
+        input_unit: String,
+        receipt_date: String,
+        before: Option<HoldingAmounts>,
+        after: HoldingAmounts,
+        basis_before: Option<HoldingBasisRef>,
+        observation: Option<HoldingObservation>,
+        order_before: Option<Box<OrderVersion>>,
+        order_after: Option<OrderReceiptPreview>,
     },
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -561,7 +561,7 @@ fn frozen_schema_four_preserves_price_request_canonical_strings_and_immutable_fi
         &fs::read(root.path().join(format!("snapshots/{seq:020}.json"))).unwrap(),
     )
     .unwrap();
-    assert_eq!(newest["schema_version"], 5);
+    assert_eq!(newest["schema_version"], 6);
     assert_eq!(
         newest["state"]["purchase_orders"].as_array().unwrap().len(),
         1
@@ -629,7 +629,7 @@ fn snapshot_readers_reject_cross_schema_kinds_and_invalid_known_order_states() {
                     .remove("purchase_orders");
             }
             "unknown_action" => {
-                value["state"]["purchase_order_versions"][0]["action"] = json!("receive")
+                value["state"]["purchase_order_versions"][0]["action"] = json!("deliver")
             }
             "received" => {
                 value["state"]["purchase_order_versions"][0]["status"] = json!("received")
