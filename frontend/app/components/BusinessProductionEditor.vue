@@ -1,13 +1,14 @@
 <script setup lang="ts">
 import type { BusinessDetail } from '~/types/business'
+import type { BusinessEditorHost } from '~/types/workspace'
 import type { BusinessEditorInitial } from '~/composables/useBusinessDraft'
 import type { Material } from '~/types/material'
 import type { DraftProductionInput, ProductionPayload } from '~/types/production'
 import { apiRequest } from '~/utils/api'
 import { validateBusinessDraft } from '~/utils/business'
 import { blankProductionInput, blankProductionOutput } from '~/utils/production'
-const props = defineProps<{ identity: string; initial: BusinessEditorInitial<ProductionPayload>; refresh: () => Promise<BusinessDetail | null> }>()
-const { payload, status, issues, preview, busy, failure, notice, storageFailure, created, pending, dirty, locked, canRetry, canReview, send, showPreview, review, resetNew, synchronizeTerminal } = useBusinessDraft(props.identity, props.initial, props.refresh)
+const props = defineProps<{ identity: string; initial: BusinessEditorInitial<ProductionPayload>; refresh: () => Promise<BusinessDetail | null>; host?: BusinessEditorHost }>()
+const { payload, status, issues, preview, previewOutdated, awaitingPrior, busy, failure, notice, storageFailure, created, pending, dirty, locked, canRetry, canReview, send, showPreview, review, resetNew, synchronizeTerminal } = useBusinessDraft(props.identity, props.initial, props.refresh, props.host)
 watch(() => props.initial, synchronizeTerminal, { immediate: true })
 const connection = useConnection()
 const available = computed(() => connection.value === 'connected')
@@ -100,7 +101,9 @@ async function previewDraft() { if (await showPreview()) { await nextTick(); pre
       <div class="field"><label for="production-note">생산 메모 (선택)</label><textarea id="production-note" v-model="payload.data.note" data-field="note" rows="3" :readonly="locked" :disabled="!available" :aria-invalid="!!issue('note')" aria-describedby="production-note-error"/><p id="production-note-error" class="field-error">{{ issue('note') }}</p></div>
       <p v-if="dirty" class="draft-note" role="status">화면에서 바꾼 내용이 아직 임시 저장되지 않았습니다.</p><div class="button-row"><button class="primary-button" type="submit" :disabled="!available || locked">{{ initial.recordId ? '수정 내용 임시 저장' : '초안 임시 저장' }}</button><button v-if="initial.recordId" class="secondary-button" type="button" :disabled="!available || locked || dirty" @click="previewDraft">확정 전 미리보기</button></div><p class="field-hint">미완성 입력도 임시 저장할 수 있습니다. 수량·원가 근거가 부족하면 입력을 유지한 채 확인이 필요한 이유를 안내합니다.</p>
     </form>
-    <section v-if="preview" ref="previewPanel" class="business-preview production-preview" tabindex="-1" aria-labelledby="production-preview-title"><h2 id="production-preview-title">실제 생산 미리보기</h2><ul v-if="preview.issues.length" class="business-issues"><li v-for="item in preview.issues" :key="`${item.field}-${item.code}`">{{ item.message }}</li></ul><ProductionResult v-if="preview.effect?.kind === 'production'" :inputs="preview.effect.inputs" :outputs="preview.effect.outputs" :materials="preview.effect.materials" :total="preview.effect.total_input_value"/><p v-if="!preview.can_confirm" class="field-hint">수량이나 원가를 임의로 줄이거나 0으로 처리하지 않습니다. 필요한 근거를 확인한 뒤 다시 미리보기해 주세요.</p><button class="primary-button" type="button" :disabled="!available || busy || !!pending || dirty || !preview.can_confirm" @click="send('confirm')">이 내용으로 확정</button></section>
+    <p v-if="previewOutdated" class="notice warning" role="status">다른 기록이 바뀌었습니다. 확정 전 미리보기를 다시 확인해 주세요.</p>
+    <p v-if="awaitingPrior" class="notice warning" role="status">다른 업무의 처리 결과를 먼저 확인한 뒤 실사를 미리보기해 주세요. 임시 저장과 입력은 계속할 수 있습니다.</p>
+    <section v-if="preview" ref="previewPanel" class="business-preview production-preview" tabindex="-1" aria-labelledby="production-preview-title"><h2 id="production-preview-title">실제 생산 미리보기</h2><ul v-if="preview.issues.length" class="business-issues"><li v-for="item in preview.issues" :key="`${item.field}-${item.code}`">{{ item.message }}</li></ul><ProductionResult v-if="preview.effect?.kind === 'production'" :inputs="preview.effect.inputs" :outputs="preview.effect.outputs" :materials="preview.effect.materials" :total="preview.effect.total_input_value"/><p v-if="!preview.can_confirm" class="field-hint">수량이나 원가를 임의로 줄이거나 0으로 처리하지 않습니다. 필요한 근거를 확인한 뒤 다시 미리보기해 주세요.</p><button class="primary-button" type="button" :disabled="!available || busy || !!pending || dirty || previewOutdated || awaitingPrior || !preview.can_confirm" @click="send('confirm')">이 내용으로 확정</button></section>
     <section v-if="initial.recordId && status === 'draft'" class="archive-section" aria-label="초안 보관"><p>초안을 보관해도 이미 확정된 생산과 정산 기준은 바뀌지 않습니다.</p><button v-if="!archiveReview" class="text-button" type="button" :disabled="!available || locked" @click="archiveReview = true">초안 보관</button><div v-else class="notice warning"><p>화면의 미저장 입력은 함께 저장되지 않습니다.</p><div class="button-row"><button class="secondary-button" type="button" :disabled="!available || locked" @click="send('archive')">초안 보관 확정</button><button class="text-button" type="button" :disabled="locked" @click="archiveReview = false">취소</button></div></div></section>
   </section>
 </template>

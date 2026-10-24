@@ -1,16 +1,18 @@
 import type { BusinessDetail, BusinessIssue, BusinessMutation, BusinessPayload, BusinessPending, BusinessPreview, BusinessStatus, BusinessSummary } from '~/types/business'
 import type { CatalogState } from '~/types/material'
+import type { BusinessEditorHost, BusinessEditorSnapshot } from '~/types/workspace'
 import { ApiError, apiRequest } from '~/utils/api'
 import { businessPending, confirmPending, copyPayload, restoreBusinessPending, sameBusinessTarget, samePayload, validBusinessPayload } from '~/utils/business'
 import { failureAction } from '~/utils/catalog'
 
 export interface BusinessEditorInitial<T extends BusinessPayload = BusinessPayload> { payload: T; state: CatalogState; recordId: string | null; headId: string | null; status: BusinessStatus; corrects: string | null; issues: BusinessIssue[] }
 
-export function useBusinessDraft<T extends BusinessPayload>(identity: string, initial: BusinessEditorInitial<T>, refresh: () => Promise<BusinessDetail | null>) {
+export function useBusinessDraft<T extends BusinessPayload>(identity: string, initial: BusinessEditorInitial<T>, refresh: () => Promise<BusinessDetail | null>, host?: BusinessEditorHost) {
   const key = `sunchang.business.${identity}`
   const pendingKey = `${key}.pending.v1`
   const draftKey = `${key}.draft.v1`
   const connection = useConnection()
+  const editorSnapshots = useState<Record<string, BusinessEditorSnapshot>>('sunchang.business.editor-snapshots.v1', () => ({}))
   const pending = useState<BusinessPending | null>(`${key}.pending`, () => {
     try {
       const value = restoreBusinessPending(sessionStorage.getItem(pendingKey))
@@ -43,6 +45,11 @@ export function useBusinessDraft<T extends BusinessPayload>(identity: string, in
   const locked = computed(() => busy.value || !!pending.value || status.value !== 'draft' || !!created.value)
   const canRetry = computed(() => !!pending.value && (!recovery.value || recovery.value === 'retry'))
   const canReview = computed(() => recovery.value === 'edit' || recovery.value === 'refresh')
+  const previewOutdated = computed(() => {
+    const current = host?.currentState(), shown = preview.value?.state
+    return !!current && !!shown && (current.epoch !== shown.epoch || BigInt(current.revision) > BigInt(shown.revision))
+  })
+  const awaitingPrior = computed(() => payload.value.kind === 'stocktake' && !!host?.awaitingPrior())
   let applying = false
   let mounted = true
   onScopeDispose(() => { mounted = false })
@@ -67,6 +74,12 @@ export function useBusinessDraft<T extends BusinessPayload>(identity: string, in
   }
   watch(payload, () => { if (!applying) { preview.value = null; notice.value = '' }; persistDraft() }, { deep: true, flush: 'sync' })
   watch(completed, () => { void refresh() })
+  function publish() {
+    const snapshot = { payload: copyPayload(payload.value), status: status.value, dirty: dirty.value, busy: busy.value, pendingAction: pending.value?.action ?? null, recovery: recovery.value, failure: failure.value, issueCount: issues.value.length, previewState: preview.value?.state ?? null }
+    editorSnapshots.value[identity] = snapshot
+    host?.notify(identity, snapshot)
+  }
+  watch([payload, status, dirty, busy, pending, recovery, failure, issues, preview], publish, { immediate: true, deep: true, flush: 'sync' })
 
   function failed(error: unknown) {
     recovery.value = error instanceof ApiError ? error.status === 413 && (payload.value.kind === 'correction' || payload.value.kind === 'production' || payload.value.kind === 'stocktake' || payload.value.kind === 'receipt' && payload.value.data.stock_effect.kind === 'reconciled') ? 'edit' : failureAction(error.status, error.code) : 'retry'
@@ -83,6 +96,7 @@ export function useBusinessDraft<T extends BusinessPayload>(identity: string, in
     let request = pending.value
     if (!request) {
       if (action === 'confirm') {
+        if (previewOutdated.value || awaitingPrior.value) return null
         if (dirty.value || !preview.value?.can_confirm || !preview.value.effect || preview.value.issues.length || preview.value.head_id !== headId.value) return null
         request = confirmPending(preview.value, () => crypto.randomUUID())
       } else if (action === 'create') request = businessPending(action, null, null, basis.value, payload.value, initial.corrects, () => crypto.randomUUID())
@@ -121,13 +135,14 @@ export function useBusinessDraft<T extends BusinessPayload>(identity: string, in
       const confirmed = confirmedPayload.kind === 'purchase_return' ? '반품을 확정했습니다. 현재 평균에 따른 수량과 가치를 차감하고 원구입 참고 근거를 보관했습니다.' : confirmedPayload.kind === 'correction' ? '정정을 확정했습니다. 원기록과 정정 이유, 변경 영향을 함께 보관했습니다.' : confirmedPayload.kind === 'stocktake' ? '실사를 확정했습니다. 확인한 수량과 소모·배분 근거를 보관했습니다.' : confirmedPayload.kind === 'waste' ? '폐기·직원식을 확정했습니다. 실제 수량과 원가를 정산 기준에 반영했습니다.' : confirmedPayload.kind === 'catalog_price' ? '가격을 확정했습니다. 확정 기록과 가격을 함께 보관했습니다.' : confirmedPayload.kind === 'receipt' ? confirmedPayload.data.stock_effect.kind === 'reconciled' ? '입고와 보정을 확정했습니다. 실사 포함 수량을 다시 더하지 않고 차이를 보관했습니다.' : '입고를 확정했습니다. 실제 수량과 금액을 정산 기준에 반영했습니다.' : confirmedPayload.kind === 'production' ? '생산을 확정했습니다. 실제 투입과 결과, 원가 배분을 정산 기준에 반영했습니다.' : confirmedPayload.kind === 'sale' ? '판매를 확정했습니다. 당시 레시피와 원가를 보관했습니다. 재고는 차감하지 않았습니다.' : { place: '주문을 확정했습니다. 미입고 내역에서 확인할 수 있습니다.', revise: '주문 수정을 확정했습니다. 이전 주문 내용은 이력에 남아 있습니다.', cancel: '주문 취소를 확정했습니다. 보유 수량과 가격은 바뀌지 않았습니다.' }[confirmedPayload.data.action]
       notice.value = { create: '초안을 임시 저장했습니다. 앱을 다시 열어도 이어서 작성할 수 있습니다.', revise: '수정 내용을 임시 저장했습니다.', confirm: confirmed, archive: '초안을 보관했습니다. 이전 입력은 이력에 남아 있습니다.' }[request.action]
       completed.value += 1
+      host?.committed(identity, response)
       return response
     } catch (error) { failed(error); return null }
-    finally { applying = false; busy.value = false }
+    finally { applying = false; busy.value = false; publish() }
   }
 
   async function showPreview() {
-    if (!initial.recordId || !headId.value || locked.value || dirty.value || connection.value !== 'connected') return false
+    if (!initial.recordId || !headId.value || locked.value || dirty.value || awaitingPrior.value || connection.value !== 'connected') return false
     busy.value = true
     failure.value = ''
     preview.value = null
@@ -138,7 +153,7 @@ export function useBusinessDraft<T extends BusinessPayload>(identity: string, in
       recovery.value = ''
       return result.can_confirm
     } catch (error) { failed(error); return false }
-    finally { busy.value = false }
+    finally { busy.value = false; publish() }
   }
 
   async function review() {
@@ -161,7 +176,7 @@ export function useBusinessDraft<T extends BusinessPayload>(identity: string, in
       if (!mounted) completed.value += 1
       return true
     } catch { failure.value = '최신 기록이나 요청 보관 정보를 갱신하지 못했습니다. 다시 시도해 주세요.'; return false }
-    finally { busy.value = false }
+    finally { busy.value = false; publish() }
   }
   function resetNew() {
     if (initial.recordId || initial.corrects || busy.value || pending.value) return
@@ -176,5 +191,5 @@ export function useBusinessDraft<T extends BusinessPayload>(identity: string, in
     notice.value = ''
     issues.value = []
   }
-  return { payload, status, issues, preview, busy, failure, recovery, notice, storageFailure, created, pending, dirty, locked, canRetry, canReview, send, showPreview, review, resetNew, synchronizeTerminal }
+  return { payload, status, issues, preview, previewOutdated, awaitingPrior, busy, failure, recovery, notice, storageFailure, created, pending, dirty, locked, canRetry, canReview, send, showPreview, review, resetNew, synchronizeTerminal }
 }

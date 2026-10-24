@@ -1138,6 +1138,7 @@ async fn static_asset(_headers: HeaderMap, request: Request<Body>) -> Response {
     let path = request.uri().path();
     let spa_route = path == "/"
         || path == "/overview"
+        || path == "/workspace"
         || path == "/materials"
         || path == "/business"
         || path == "/orders"
