@@ -1,10 +1,11 @@
 # T-021: 1차 업무 통합·복구·배포 준비 검증
 
-- 상태: 대기 — 선행 티켓 완료 후 착수
+- 상태: 대기 — T-017·T-019 완료 후 통합 검증 착수, 실환경 검증은 별도 완료 조건
 - 단계: 1차
 - 작성일: 2026-10-24
 - 관련 요구: C-01~C-03, D-01~D-05·D-08~D-13
-- 선행: [T-001](T-001-portable-local-app.md)의 필수 잔여 검증, [T-017](T-017-operations-overview.md), [T-019](T-019-data-compatibility.md)
+- 선행: [T-017](T-017-operations-overview.md), [T-019](T-019-data-compatibility.md)
+- 최종 완료 조건: 이 티켓의 모든 수용 기준과 [T-001](T-001-portable-local-app.md)의 필수 잔여 검증 충족. T-001의 미완료는 통합 검증 착수를 막지 않는다.
 - 기준: [요구사항](../REQUIREMENTS.md), [최신 운영 결정](../decisions/ADR-007-consumption-and-ticket-scope.md)
 
 ## 목적
@@ -30,7 +31,7 @@
 
 ## 검증 방법
 
-README의 build·Rust fmt/test/clippy·UI test/typecheck/e2e·manifest/release 검사. 필요 환경에서 T-001 실환경 시나리오. 앱을 구현하지 않은 현재 문서 작성 단계에서는 실행하지 않는다.
+T-017·T-019 완료 후 README의 build·Rust fmt/test/clippy·UI test/typecheck/e2e·manifest/release 검사로 T-021-01~04의 통합 검증을 수행하고 T-021-06에 결과와 한계를 기록한다. T-001의 실환경 검증이 남아 있어도 실행 가능한 검증은 진행한다. 별도 장비 등 필요한 환경을 확보하면 T-021-05의 실환경 시나리오를 검증한다. 환경이 없으면 해당 기준을 미검증으로 유지하고 티켓 최종 완료·배포 준비 완료로 처리하지 않는다. 현재 문서 보완 단계에서는 앱 검증을 실행하지 않는다.
 
 구현 티켓은 [공통 완료 조건](README.md#공통-완료-조건)의 실제 명령에서 영향 범위를 선택한다. 후속 구체화 티켓은 먼저 미결정을 확정하고 구현·검증 작업을 나눈다.
 

@@ -11,7 +11,7 @@
 
 1차 순차 실행안: [T-002](T-002-domain-contract.md) → [T-020](T-020-ui-foundation.md) → [T-003](T-003-materials-and-units.md) → [T-005](T-005-business-history.md) → [T-006](T-006-purchase-orders.md) → [T-007](T-007-receipts.md) → [T-004](T-004-recipes-and-costs.md) → [T-008](T-008-production.md) → [T-009](T-009-sales-consumption.md) → [T-010](T-010-stocktake-and-waste.md) → [T-011](T-011-late-receipt-reconciliation.md) → [T-012](T-012-corrections-and-versions.md) → [T-013](T-013-purchase-returns.md) → [T-014](T-014-closing-workspace.md) → [T-015](T-015-photos-and-suppliers.md) → [T-016](T-016-statistics-and-history.md) → [T-017](T-017-operations-overview.md) → [T-018](T-018-full-state-restore.md) → [T-019](T-019-data-compatibility.md) → [T-021](T-021-first-release-verification.md).
 
-T-002는 계산·데이터 계약, T-020은 공통 UI 기반으로 서로 독립적이다. T-001에서 이미 구현한 실행/저장 기반을 이용하되 별도 장비·실제 절전 등 남은 검증을 완료한 것으로 바꾸지 않는다. 업무 구현 자체의 선행 조건과 최종 배포 검증을 구분하며 T-021 완료에는 T-001의 필수 잔여 검증도 필요하다.
+T-002는 계산·데이터 계약, T-020은 공통 UI 기반으로 서로 독립적이다. T-001에서 이미 구현한 실행/저장 기반을 이용하되 별도 장비·실제 절전 등 남은 검증을 완료한 것으로 바꾸지 않는다. T-021은 T-017·T-019 완료 후 통합 검증에 착수할 수 있으며 T-001의 실환경 검증 미완료 때문에 실행 가능한 검증을 대기하지 않는다. T-021의 최종 완료·배포 준비 완료에는 T-001의 필수 잔여 검증도 필요하다.
 
 | 티켓 | 단계·현재 상태 | 선행 |
 | --- | --- | --- |
@@ -35,7 +35,7 @@ T-002는 계산·데이터 계약, T-020은 공통 UI 기반으로 서로 독립
 | [T-018: 사진과 버전 이력을 포함한 전체 상태 복원](T-018-full-state-restore.md) | 1차 · 대기 | [T-014](T-014-closing-workspace.md), [T-015](T-015-photos-and-suppliers.md) |
 | [T-019: 이전 DB·JSON 호환과 같은 OS 데이터 이동](T-019-data-compatibility.md) | 1차 · 대기 | [T-018](T-018-full-state-restore.md) |
 | [T-020: 공통 탐색·입력 상태·라이트/다크와 반응형 UI](T-020-ui-foundation.md) | 1차 · 착수 가능 | 없음 |
-| [T-021: 1차 업무 통합·복구·배포 준비 검증](T-021-first-release-verification.md) | 1차 · 대기 | [T-001](T-001-portable-local-app.md), [T-017](T-017-operations-overview.md), [T-019](T-019-data-compatibility.md) |
+| [T-021: 1차 업무 통합·복구·배포 준비 검증](T-021-first-release-verification.md) | 1차 · 대기 — 최종 완료에는 T-001 필수 검증 필요 | [T-017](T-017-operations-overview.md), [T-019](T-019-data-compatibility.md) |
 | [T-022: 2차 내일 메뉴·공유 재료 계획 요구 구체화](T-022-next-day-menu-plan.md) | 2차 · 구체화/착수 대기 | [T-021](T-021-first-release-verification.md) |
 | [T-023: 2차 실제 작업시간 기록과 시계열](T-023-work-time-history.md) | 2차 · 구체화/착수 대기 | [T-021](T-021-first-release-verification.md) |
 | [T-024: 시설 점검 카테고리·항목·일일 기록](T-024-facility-checks.md) | 백로그 · 구체화/착수 대기 | 없음 |
