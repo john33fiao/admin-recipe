@@ -18,6 +18,7 @@ fn seq(v: &str) -> Result<i64, StoreError> {
 fn kind(k: CorrectionSubjectKind) -> &'static str {
     match k {
         CorrectionSubjectKind::Receipt => "receipt",
+        CorrectionSubjectKind::PurchaseReturn => "purchase_return",
         CorrectionSubjectKind::Production => "production",
         CorrectionSubjectKind::SaleCount => "sale_count",
         CorrectionSubjectKind::Waste => "waste",
@@ -27,6 +28,7 @@ fn kind(k: CorrectionSubjectKind) -> &'static str {
 fn entity(k: CorrectionSubjectKind) -> CorrectionRefKind {
     match k {
         CorrectionSubjectKind::Receipt => CorrectionRefKind::Receipt,
+        CorrectionSubjectKind::PurchaseReturn => CorrectionRefKind::PurchaseReturn,
         CorrectionSubjectKind::Production => CorrectionRefKind::Production,
         CorrectionSubjectKind::SaleCount => CorrectionRefKind::Sale,
         CorrectionSubjectKind::Waste => CorrectionRefKind::Waste,

@@ -44,6 +44,7 @@ pub struct HoldingObservation {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HoldingChangeKind {
+    PurchaseReturn,
     Receipt,
     Production,
     Waste,
@@ -53,6 +54,13 @@ pub enum HoldingChangeKind {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum HoldingChange {
+    PurchaseReturn {
+        event_id: String,
+        quantity: String,
+        deducted_value: String,
+        recorded_at: String,
+        seq: String,
+    },
     Reconciliation {
         event_id: String,
         reconciliation_id: String,
@@ -92,6 +100,7 @@ pub enum HoldingChange {
 impl HoldingChange {
     pub fn kind(&self) -> HoldingChangeKind {
         match self {
+            Self::PurchaseReturn { .. } => HoldingChangeKind::PurchaseReturn,
             Self::Receipt { .. } => HoldingChangeKind::Receipt,
             Self::Production { .. } => HoldingChangeKind::Production,
             Self::Waste { .. } => HoldingChangeKind::Waste,
@@ -100,6 +109,7 @@ impl HoldingChange {
     }
     pub fn event_id(&self) -> &str {
         match self {
+            Self::PurchaseReturn { event_id, .. } => event_id,
             Self::Receipt { event_id, .. }
             | Self::Production { event_id, .. }
             | Self::Waste { event_id, .. } => event_id,
@@ -108,6 +118,7 @@ impl HoldingChange {
     }
     pub fn recorded_at(&self) -> &str {
         match self {
+            Self::PurchaseReturn { recorded_at, .. } => recorded_at,
             Self::Receipt { recorded_at, .. }
             | Self::Production { recorded_at, .. }
             | Self::Waste { recorded_at, .. } => recorded_at,
@@ -116,6 +127,7 @@ impl HoldingChange {
     }
     pub fn seq(&self) -> &str {
         match self {
+            Self::PurchaseReturn { seq, .. } => seq,
             Self::Receipt { seq, .. } | Self::Production { seq, .. } | Self::Waste { seq, .. } => {
                 seq
             }
@@ -364,6 +376,17 @@ fn change_amounts(
     let zero_q = Quantity::from_micros(0)?;
     let zero_v = Money::from_micros(0)?;
     match change {
+        HoldingChange::PurchaseReturn {
+            quantity,
+            deducted_value,
+            ..
+        } => {
+            let q = Quantity::parse(quantity)?;
+            if q.micros() == 0 {
+                return Err(invalid("실제 반품 수량은 0보다 커야 합니다"));
+            }
+            Ok((q, Money::parse(deducted_value)?, zero_q, zero_v))
+        }
         HoldingChange::Reconciliation {
             reconciliation_id,
             receipt_id,
@@ -448,7 +471,7 @@ fn apply_change(
     output_v: Money,
 ) -> Result<(Quantity, Money), DomainError> {
     if input_q.micros() > current_q.micros() || input_v.micros() > current_v.micros() {
-        return Err(invalid("생산 투입이 입력 전 보유 수량·가치를 넘습니다"));
+        return Err(invalid("확정 차감이 입력 전 보유 수량·가치를 넘습니다"));
     }
     if input_q.micros() > 0 {
         let expected = crate::domain::round_ratio(
@@ -457,7 +480,7 @@ fn apply_change(
         )?;
         if i128::from(input_v.micros()) != expected {
             return Err(invalid(
-                "생산 투입 가치가 입력 전 보유 평균 원가와 다릅니다",
+                "확정 차감 가치가 입력 전 보유 평균 원가와 다릅니다",
             ));
         }
     }
@@ -474,7 +497,7 @@ fn apply_change(
 }
 
 /// Reconstruct a view from the exact baseline Q/V and subsequent confirmed
-/// receipts, production effects and explicit waste. This is not a current head.
+/// receipts, production, returns and explicit waste. This is not a current head.
 /// The event establishing the baseline is checked, then excluded from changes.
 pub fn project_holding(
     baseline: &HoldingInput,
@@ -529,6 +552,9 @@ pub fn project_holding(
                 HoldingChangeKind::Waste => {
                     return Err(invalid("폐기는 시작 기준을 만들 수 없습니다"));
                 }
+                HoldingChangeKind::PurchaseReturn => {
+                    return Err(invalid("반품은 시작 기준을 만들 수 없습니다"));
+                }
             };
             if basis
                 .as_ref()
@@ -577,6 +603,9 @@ pub fn project_holding(
                     HoldingChangeKind::Reconciliation => HoldingBasisKind::Reconciliation,
                     HoldingChangeKind::Waste => {
                         return Err(invalid("폐기는 시작 기준을 만들 수 없습니다"));
+                    }
+                    HoldingChangeKind::PurchaseReturn => {
+                        return Err(invalid("반품은 시작 기준을 만들 수 없습니다"));
                     }
                 },
                 id: Some(change.event_id().into()),

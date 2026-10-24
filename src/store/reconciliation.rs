@@ -84,6 +84,7 @@ pub(super) struct Validation<'a> {
     pub production_inputs: &'a [production::InputRow],
     pub production_outputs: &'a [production::OutputRow],
     pub wastes: &'a [crate::waste::WasteRecord],
+    pub purchase_returns: &'a [crate::purchase_return::PurchaseReturnRecord],
     pub material_versions: &'a [crate::catalog::MaterialVersion],
     pub orders: &'a [crate::purchase_order::OrderVersion],
     pub business_records: &'a [business::Record],
@@ -168,6 +169,7 @@ struct History<'a> {
     inputs: &'a [production::InputRow],
     outputs: &'a [production::OutputRow],
     wastes: &'a [crate::waste::WasteRecord],
+    purchase_returns: &'a [crate::purchase_return::PurchaseReturnRecord],
     materials: &'a [crate::catalog::MaterialVersion],
 }
 
@@ -180,6 +182,7 @@ struct Loaded {
     stocktake: stocktake::SnapshotRows,
     production: production::SnapshotRows,
     wastes: Vec<crate::waste::WasteRecord>,
+    purchase_returns: Vec<crate::purchase_return::PurchaseReturnRecord>,
     materials: Vec<crate::catalog::MaterialVersion>,
 }
 impl Loaded {
@@ -193,6 +196,7 @@ impl Loaded {
             stocktake: stocktake::snapshot_rows(connection)?,
             production: production::snapshot_rows(connection)?,
             wastes: super::waste::records(connection, None, None)?,
+            purchase_returns: super::purchase_return::records(connection, None, None)?,
             materials: catalog::versions(connection, None)?,
         };
         let count: i64 = connection
@@ -246,6 +250,7 @@ impl Loaded {
             inputs: &self.production.inputs,
             outputs: &self.production.outputs,
             wastes: &self.wastes,
+            purchase_returns: &self.purchase_returns,
             materials: &self.materials,
         }
     }
@@ -446,6 +451,23 @@ impl History<'_> {
                         &w.effect.unit,
                     )?,
                     quantity: q(&w.effect.quantity)?,
+                });
+            }
+        }
+        for r in self.purchase_returns {
+            let n = seq(&r.seq)?;
+            if n <= at {
+                events.push(ValueReplayEvent::PurchaseReturn {
+                    event: ValueEventRef {
+                        id: r.id.clone(),
+                        seq: n,
+                    },
+                    material: material(
+                        &r.effect.material_id,
+                        &r.effect.material_version_id,
+                        &r.effect.unit,
+                    )?,
+                    quantity: q(&r.effect.quantity)?,
                 });
             }
         }
@@ -1161,6 +1183,7 @@ pub(super) fn apply(
                 production_effect_id: None,
                 observation_version_id: None,
                 waste_id: None,
+                purchase_return_id: None,
                 reconciliation_effect_id: Some(&row.id),
                 before: &before,
                 after: &e.after,
@@ -1235,6 +1258,7 @@ pub(super) fn validate_snapshot(s: Validation<'_>) -> Result<(), StoreError> {
         inputs: s.production_inputs,
         outputs: s.production_outputs,
         wastes: s.wastes,
+        purchase_returns: s.purchase_returns,
         materials: s.material_versions,
     };
     let mut ids = HashSet::new();
@@ -1754,6 +1778,7 @@ pub(super) fn validate_reconciliation_schema(connection: &Connection) -> anyhow:
             production_inputs: &loaded.production.inputs,
             production_outputs: &loaded.production.outputs,
             wastes: &loaded.wastes,
+            purchase_returns: &loaded.purchase_returns,
             material_versions: &loaded.materials,
             orders: &super::purchase_order::read_versions(connection, None, None, false)?,
             business_records: &business.records,

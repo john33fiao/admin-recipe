@@ -115,6 +115,104 @@ fn renamed_identifiers(sql: &str, names: &[&str]) -> String {
     result
 }
 
+pub(super) fn migrate_purchase_returns(connection: &Connection) -> anyhow::Result<()> {
+    let journals = connection
+        .prepare("SELECT sequence,payload FROM snapshot_outbox ORDER BY sequence")?
+        .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    for (seq, json) in journals {
+        snapshot::validate_source(&json, seq, 12)?;
+    }
+    connection.execute_batch("PRAGMA defer_foreign_keys=ON;
+        CREATE TABLE purchase_returns(
+        id TEXT PRIMARY KEY NOT NULL,confirmation_id TEXT NOT NULL UNIQUE REFERENCES business_confirmations(id),
+        receipt_id TEXT NOT NULL REFERENCES receipts(id),receipt_version_id TEXT NOT NULL,
+        material_id TEXT NOT NULL,material_version_id TEXT NOT NULL,
+        before_holding_version_id TEXT NOT NULL REFERENCES holding_versions_next(id),
+        quantity_micros INTEGER NOT NULL CHECK(quantity_micros>0 AND quantity_micros<=9000000000000000),
+        deducted_value_micros INTEGER NOT NULL CHECK(deducted_value_micros>=0 AND deducted_value_micros<=9000000000000000000),
+        note TEXT NOT NULL,effect_json TEXT NOT NULL,recorded_at TEXT NOT NULL,
+        sequence INTEGER NOT NULL UNIQUE REFERENCES snapshot_outbox(sequence),
+        FOREIGN KEY(material_id,material_version_id) REFERENCES material_versions(material_id,id));
+        CREATE INDEX purchase_returns_receipt ON purchase_returns(receipt_id);
+        CREATE INDEX purchase_returns_material ON purchase_returns(material_id);")?;
+    let tables = connection.prepare("SELECT name,sql FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name!='purchase_returns' ORDER BY name")?
+        .query_map([], |r| Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?)))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut names = vec!["holding_versions".to_string()];
+    loop {
+        let old = names.len();
+        for (name, _) in &tables {
+            if names.contains(name) {
+                continue;
+            }
+            let parents = connection
+                .prepare(&format!("PRAGMA foreign_key_list({name})"))?
+                .query_map([], |r| r.get::<_, String>(2))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            if parents.iter().any(|p| names.contains(p)) {
+                names.push(name.clone());
+            }
+        }
+        if old == names.len() {
+            break;
+        }
+    }
+    let identifiers = names.iter().map(String::as_str).collect::<Vec<_>>();
+    let mut indexes = vec![];
+    for name in &names {
+        indexes.extend(connection.prepare("SELECT sql FROM sqlite_master WHERE type='index' AND tbl_name=?1 AND sql IS NOT NULL ORDER BY name")?
+            .query_map([name],|r|r.get::<_,String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?);
+        let original = &tables
+            .iter()
+            .find(|(n, _)| n == name)
+            .ok_or_else(|| anyhow::anyhow!("원테이블이 없습니다"))?
+            .1;
+        let changed = if name == "holding_versions" {
+            let sql = original.replace(
+                "(correction_projection_id IS NOT NULL)=1",
+                "(correction_projection_id IS NOT NULL)+(purchase_return_id IS NOT NULL)=1",
+            );
+            let open = sql
+                .find('(')
+                .ok_or_else(|| anyhow::anyhow!("테이블 정의 오류"))?;
+            format!(
+                "{}purchase_return_id TEXT UNIQUE REFERENCES purchase_returns(id),{}",
+                &sql[..open + 1],
+                &sql[open + 1..]
+            )
+        } else {
+            original.clone()
+        };
+        connection.execute_batch(&renamed_identifiers(&changed, &identifiers))?;
+    }
+    for name in &names {
+        let columns = connection
+            .prepare(&format!("PRAGMA table_info({name})"))?
+            .query_map([], |r| r.get::<_, String>(1))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let list = columns
+            .iter()
+            .map(|c| format!("\"{c}\""))
+            .collect::<Vec<_>>()
+            .join(",");
+        connection.execute_batch(&format!(
+            "INSERT INTO {name}_next({list}) SELECT {list} FROM {name}"
+        ))?;
+    }
+    for name in names.iter().rev() {
+        connection.execute_batch(&format!("DROP TABLE {name}"))?;
+    }
+    for name in &names {
+        connection.execute_batch(&format!("ALTER TABLE {name}_next RENAME TO {name}"))?;
+    }
+    for sql in indexes {
+        connection.execute_batch(&sql)?;
+    }
+    connection.execute_batch("PRAGMA user_version=13")?;
+    Ok(())
+}
+
 /// Preserve all incoming edges while widening only the derived-state tables.
 pub(super) fn migrate_corrections(connection: &Connection) -> anyhow::Result<()> {
     let journals = connection

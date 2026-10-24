@@ -125,6 +125,7 @@ fn expected_references(
             .ok_or_else(|| invalid("계획 사건의 실제 개정 없음"))?;
         let entity = match change.reference.kind {
             CorrectionSubjectKind::Receipt => CorrectionRefKind::Receipt,
+            CorrectionSubjectKind::PurchaseReturn => CorrectionRefKind::PurchaseReturn,
             CorrectionSubjectKind::Production => CorrectionRefKind::Production,
             CorrectionSubjectKind::SaleCount => CorrectionRefKind::Sale,
             CorrectionSubjectKind::Waste => CorrectionRefKind::Waste,
@@ -816,7 +817,7 @@ fn validate_resolved(
         CorrectionRefKind::Sale=>s.event_versions.iter().any(|v|v.correction_id==r.id&&v.reference.original_id==*id&&v.reference.kind==CorrectionSubjectKind::SaleCount&&(v.sale_version_id.as_deref().unwrap_or(&v.id)==version)),
         CorrectionRefKind::PriceBasis=>s.price_bases.iter().any(|p|p.correction_id==r.id&&p.material_id==*id&&p.id==version),
         CorrectionRefKind::InclusionLink=>s.projection_versions.iter().any(|p|p.correction_id==r.id&&matches!(&p.projection,Projection::Inclusion {links,..} if links.iter().any(|l|l.link_id==*id&&l.id==version))),
-        _=>s.event_versions.iter().any(|v|v.correction_id==r.id&&v.reference.original_id==*id&&v.id==version&&matches!((entity,v.reference.kind),(CorrectionRefKind::Receipt,CorrectionSubjectKind::Receipt)|(CorrectionRefKind::Production,CorrectionSubjectKind::Production)|(CorrectionRefKind::Sale,CorrectionSubjectKind::SaleCount)|(CorrectionRefKind::Waste,CorrectionSubjectKind::Waste)|(CorrectionRefKind::Stocktake,CorrectionSubjectKind::Stocktake))),
+        _=>s.event_versions.iter().any(|v|v.correction_id==r.id&&v.reference.original_id==*id&&v.id==version&&matches!((entity,v.reference.kind),(CorrectionRefKind::Receipt,CorrectionSubjectKind::Receipt)|(CorrectionRefKind::PurchaseReturn,CorrectionSubjectKind::PurchaseReturn)|(CorrectionRefKind::Production,CorrectionSubjectKind::Production)|(CorrectionRefKind::Sale,CorrectionSubjectKind::SaleCount)|(CorrectionRefKind::Waste,CorrectionSubjectKind::Waste)|(CorrectionRefKind::Stocktake,CorrectionSubjectKind::Stocktake))),
     };
     check(
         valid,

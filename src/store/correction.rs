@@ -193,6 +193,7 @@ pub(super) struct Validation<'a> {
     pub orders: &'a [crate::purchase_order::OrderVersion],
     pub closures: &'a [super::receipt::ClosureRow],
     pub receipts: &'a [crate::receipt::ReceiptRecord],
+    pub purchase_returns: &'a [crate::purchase_return::PurchaseReturnRecord],
     pub productions: &'a [super::production::RecordRow],
     pub production_inputs: &'a [super::production::InputRow],
     pub production_outputs: &'a [super::production::OutputRow],
@@ -218,6 +219,7 @@ pub(super) struct Validation<'a> {
 pub(super) fn kind_text(kind: CorrectionSubjectKind) -> &'static str {
     match kind {
         CorrectionSubjectKind::Receipt => "receipt",
+        CorrectionSubjectKind::PurchaseReturn => "purchase_return",
         CorrectionSubjectKind::Production => "production",
         CorrectionSubjectKind::SaleCount => "sale_count",
         CorrectionSubjectKind::Waste => "waste",
@@ -227,6 +229,7 @@ pub(super) fn kind_text(kind: CorrectionSubjectKind) -> &'static str {
 fn parse_kind(value: &str) -> Result<CorrectionSubjectKind, StoreError> {
     match value {
         "receipt" => Ok(CorrectionSubjectKind::Receipt),
+        "purchase_return" => Ok(CorrectionSubjectKind::PurchaseReturn),
         "production" => Ok(CorrectionSubjectKind::Production),
         "sale_count" => Ok(CorrectionSubjectKind::SaleCount),
         "waste" => Ok(CorrectionSubjectKind::Waste),
@@ -358,6 +361,12 @@ pub(super) fn check_target(
             "정정 대상의 업무 종류를 바꿀 수 없습니다".into(),
         ));
     }
+    if let CorrectionActionDraft::Replace {
+        replacement: CorrectionReplacementDraft::PurchaseReturn { data },
+    } = &data.action
+    {
+        super::purchase_return::check_source(connection, data)?;
+    }
     Ok(())
 }
 
@@ -421,6 +430,7 @@ pub(super) fn material_name(
     Ok(match value {
         CorrectionEventValue::SaleCount { result, .. } => Some(result.material_name.clone()),
         CorrectionEventValue::Waste { result, .. } => Some(result.material_name.clone()),
+        CorrectionEventValue::PurchaseReturn { result, .. } => Some(result.material_name.clone()),
         CorrectionEventValue::Production { result, .. } => {
             result.outputs.first().map(|r| r.material_name.clone())
         }
@@ -491,6 +501,19 @@ impl Store {
                 // The template never changes evidence or invents a future ID.
                 row.expected_version_id = Some(observation.version_id.clone());
             }
+        }
+        if let CorrectionReplacementDraft::PurchaseReturn { data } = &mut replacement_template {
+            data.expected_receipt_version_id = data
+                .receipt_id
+                .as_deref()
+                .and_then(|id| {
+                    history.events.iter().find(|e| {
+                        e.reference.kind == CorrectionSubjectKind::Receipt
+                            && e.reference.original_id == id
+                            && e.effective_value.is_some()
+                    })
+                })
+                .map(|e| e.reference.version_id.clone());
         }
         let draft = DraftCorrectionV1 {
             expected_target_version_id: Some(current.reference.version_id.clone()),

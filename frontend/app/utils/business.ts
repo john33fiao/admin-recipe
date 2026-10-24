@@ -1,3 +1,4 @@
+import { validPurchaseReturnShape, validatePurchaseReturnDraft } from './purchase-return.ts'
 import { cloneCorrection, validCorrectionShape, validateCorrectionDraft, correctionKinds } from './correction.ts'
 import { copyValuation, validStocktakeShape, validWasteShape, validateStocktakeDraft } from './stocktake.ts'
 import type { BusinessPayload, BusinessPending, BusinessPreview, CatalogPricePayload } from '../types/business.ts'
@@ -13,6 +14,7 @@ const object = (value: unknown): value is Record<string, unknown> => !!value && 
 const exact = (value: Record<string, unknown>, keys: string[]) => Object.keys(value).length === keys.length && keys.every(key => Object.hasOwn(value, key))
 
 export function validateBusinessDraft(payload: BusinessPayload): Record<string, string> {
+  if (payload.kind === 'purchase_return') return validatePurchaseReturnDraft(payload)
   if (payload.kind === 'correction') return validateCorrectionDraft(payload)
   if (payload.kind === 'stocktake' || payload.kind === 'waste') return validateStocktakeDraft(payload)
   if (payload.kind === 'receipt') return validateReceiptDraft(payload)
@@ -48,9 +50,10 @@ export function sameBusinessTarget(a: BusinessPayload, b: BusinessPayload) {
   if (a.kind !== 'purchase_order' || b.kind !== 'purchase_order') return true
   return a.data.action === b.data.action && (a.data.action === 'place' || (b.data.action !== 'place' && a.data.order_id === b.data.order_id))
 }
-export function businessLabel(payload: BusinessPayload) { return payload.kind === 'correction' ? '확정 기록 정정' : payload.kind === 'stocktake' ? '실사' : payload.kind === 'waste' ? '폐기 · 직원식' : payload.kind === 'catalog_price' ? '사전 가격' : payload.kind === 'receipt' ? '실제 입고' : payload.kind === 'production' ? '실제 생산' : payload.kind === 'sale' ? '판매' : { place: '주문 작성', revise: '주문 수정', cancel: '주문 취소' }[payload.data.action] }
+export function businessLabel(payload: BusinessPayload) { return payload.kind === 'purchase_return' ? '구입 반품' : payload.kind === 'correction' ? '확정 기록 정정' : payload.kind === 'stocktake' ? '실사' : payload.kind === 'waste' ? '폐기 · 직원식' : payload.kind === 'catalog_price' ? '사전 가격' : payload.kind === 'receipt' ? '실제 입고' : payload.kind === 'production' ? '실제 생산' : payload.kind === 'sale' ? '판매' : { place: '주문 작성', revise: '주문 수정', cancel: '주문 취소' }[payload.data.action] }
 export function businessNote(payload: BusinessPayload) { return payload.kind === 'correction' ? payload.data.reason : payload.data.note }
 export function businessInputText(payload: BusinessPayload) {
+  if (payload.kind === 'purchase_return') return `반품 ${payload.data.quantity || '수량 미입력'} ${payload.data.unit || '단위 미입력'}`
   if (payload.kind === 'correction') return payload.data.action.kind === 'void' ? '원기록의 유효 효과 취소' : `${correctionKinds[payload.data.action.replacement.kind]} 입력 정정`
   if (payload.kind === 'stocktake') return `실사 ${payload.data.rows.length}행 · 수량 입력 ${payload.data.rows.filter(row => row.quantity.trim() !== '').length}행`
   if (payload.kind === 'waste') return `${payload.data.reason === 'discard' ? '명시 폐기' : '직원식'} ${payload.data.quantity || '수량 미입력'} ${payload.data.unit}`
@@ -86,7 +89,8 @@ export function validBusinessPayload(value: unknown): value is BusinessPayload {
     else if (value.data.action === 'revise') { if (!exact(value.data, ['action', 'order_id', 'expected_order_version_id', ...common])) return false }
     else if (value.data.action === 'cancel') { if (!exact(value.data, ['action', 'order_id', 'expected_order_version_id', 'note'])) return false }
     else return false
-  } else if (value.kind === 'receipt') { if (!validReceiptShape(value.data)) return false }
+  } else if (value.kind === 'purchase_return') { if (!validPurchaseReturnShape(value.data)) return false }
+  else if (value.kind === 'receipt') { if (!validReceiptShape(value.data)) return false }
   else if (value.kind === 'production') { if (!validProductionShape(value.data)) return false }
   else if (value.kind === 'sale') { if (!validSaleShape(value.data)) return false }
   else if (value.kind === 'stocktake') { if (!validStocktakeShape(value.data)) return false }

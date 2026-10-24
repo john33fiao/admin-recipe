@@ -119,6 +119,7 @@ pub(super) fn apply_waste(
     holding::append(
         connection,
         holding::AppendHolding {
+            purchase_return_id: None,
             material_id: &waste.material_id,
             material_version_id: &waste.material_version_id,
             receipt_id: None,

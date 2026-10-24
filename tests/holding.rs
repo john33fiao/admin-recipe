@@ -74,6 +74,40 @@ fn waste_change(event: u128, seq: &str, quantity: &str, loss: &str) -> HoldingCh
 }
 
 #[test]
+fn returns_withdraw_average_value_and_leave_no_full_return_residue() {
+    let basis = observed("3000", "40000");
+    let returned =
+        |event, seq: &str, quantity: &str, deducted: &str| HoldingChange::PurchaseReturn {
+            event_id: id(event),
+            quantity: quantity.into(),
+            deducted_value: deducted.into(),
+            recorded_at: "2026-01-01T12:00:00.000Z".into(),
+            seq: seq.into(),
+        };
+    let partial = project_holding(&basis, &[returned(20, "11", "1000", "13333.333333")]).unwrap();
+    assert_eq!(partial.observation, basis.observation);
+    assert_eq!(partial.confirmed_changes.len(), 1);
+    let amounts = partial.settlement_basis.unwrap();
+    assert_eq!(amounts.quantity, "2000");
+    assert_eq!(amounts.value.as_deref(), Some("26666.666667"));
+    let full = project_holding(
+        &basis,
+        &[
+            returned(20, "11", "1000", "13333.333333"),
+            returned(21, "12", "2000", "26666.666667"),
+        ],
+    )
+    .unwrap();
+    assert_eq!(full.confirmed_changes.len(), 2);
+    let amounts = full.settlement_basis.unwrap();
+    assert_eq!(amounts.quantity, "0");
+    assert_eq!(amounts.value.as_deref(), Some("0"));
+    assert!(project_holding(&basis, &[returned(20, "11", "1000", "30000")]).is_err());
+    assert!(project_holding(&basis, &[returned(20, "11", "0", "0")]).is_err());
+    assert!(project_holding(&basis, &[returned(20, "11", "3001", "40000")]).is_err());
+}
+
+#[test]
 fn observation_projection_keeps_partial_waste_value_and_ends_full_loss_before_next_receipt() {
     let basis = observed("10000", "9000");
     let partial = project_holding(&basis, &[waste_change(20, "11", "1000", "0")]).unwrap();

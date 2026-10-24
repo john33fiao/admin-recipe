@@ -1,0 +1,11 @@
+<script setup lang="ts">
+import type { PurchaseReturnEffect } from '~/types/purchase-return'
+import { displayDecimal } from '~/utils/catalog'
+defineProps<{ value: PurchaseReturnEffect }>()
+</script>
+<template>
+  <div class="purchase-return-result"><h3><NuxtLink :to="`/materials/${value.material_id}`">{{ value.material_name }}</NuxtLink> · 구입 반품</h3>
+    <section aria-label="원구입 참고 근거"><h4>원구입 참고 근거</h4><dl class="return-fields"><div><dt>원구입 참고 수량·금액</dt><dd>{{ displayDecimal(value.source.original_quantity) }}{{ value.source.original_unit }} · {{ displayDecimal(value.source.original_amount) }}원</dd></div><div><dt>적용한 유효 입고</dt><dd>{{ displayDecimal(value.source.quantity) }}{{ value.unit }} · {{ displayDecimal(value.source.amount) }}원</dd></div><div><dt>이 반품 직전 반환 가능 수량</dt><dd>{{ displayDecimal(value.source.remaining_quantity) }}{{ value.unit }} <p class="field-hint">앞서 반품 {{ displayDecimal(value.source.returned_quantity) }}{{ value.unit }}</p></dd></div></dl><NuxtLink :to="`/receipts/${value.source.reference.id}`">연결된 원입고 보기</NuxtLink><p class="field-hint">{{ value.source.reference.kind === 'proposed' ? '이번 정정에서 바꾸는 입고 근거' : '적용한 입고 버전' }} <span class="material-id">{{ value.source.reference.kind === 'existing' ? value.source.reference.version_id : value.source.reference.expected_version_id ?? '새로 적용할 근거' }}</span></p></section>
+    <section aria-label="실제 평균 가치 차감"><h4>실제 평균 가치 차감</h4><dl class="return-fields"><div><dt>실제 반품 수량</dt><dd>{{ displayDecimal(value.quantity) }}{{ value.unit }} <p class="field-hint">입력 {{ value.input_quantity }}{{ value.input_unit }}</p></dd></div><div><dt>실제 차감액</dt><dd class="preview-result">{{ displayDecimal(value.deducted_value) }}원</dd></div><div><dt>이전 정산 기준</dt><dd>{{ displayDecimal(value.before.quantity) }}{{ value.unit }} · {{ value.before.value === null ? '가치 미확인' : displayDecimal(value.before.value) + '원' }}</dd></div><div><dt>반품 후 정산 기준</dt><dd>{{ displayDecimal(value.after.quantity) }}{{ value.unit }} · {{ value.after.value === null ? '가치 미확인' : displayDecimal(value.after.value) + '원' }}</dd></div></dl><p class="field-hint">현재 섞여 있는 재고의 평균 가치로 차감합니다. 전량을 반품하면 남은 가치를 모두 차감합니다. 이 금액은 실제 환급액이 아니며, 반품 수량은 판매 소모에서 제외됩니다.</p></section>
+  </div>
+</template>

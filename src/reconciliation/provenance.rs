@@ -583,6 +583,7 @@ fn replay(
     for event in events {
         let event_ref = match event {
             ValueReplayEvent::Inflow { event, .. }
+            | ValueReplayEvent::PurchaseReturn { event, .. }
             | ValueReplayEvent::Observation { event, .. }
             | ValueReplayEvent::Production { event, .. }
             | ValueReplayEvent::Waste { event, .. } => event,
@@ -721,6 +722,14 @@ fn replay(
                         .map(|r| (r.material.clone(), r.quantity.micros())),
                 )?;
                 production(&mut stocks, &inputs, &outputs)?;
+            }
+            ValueReplayEvent::PurchaseReturn {
+                material, quantity, ..
+            } => {
+                stocks
+                    .get_mut(&material.material_id)
+                    .ok_or_else(|| history("반품 출처가 없습니다"))?
+                    .take(quantity.micros())?;
             }
             ValueReplayEvent::Waste {
                 material, quantity, ..

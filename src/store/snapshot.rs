@@ -1,7 +1,7 @@
 use super::{
     Material, SCHEMA_VERSION, StoreError, business, catalog, correction, holding, production,
-    purchase_order, read_materials, receipt, recipe, reconciliation, sale, stocktake, unavailable,
-    waste,
+    purchase_order, purchase_return, read_materials, receipt, recipe, reconciliation, sale,
+    stocktake, unavailable, waste,
 };
 use crate::catalog::{CatalogState, MaterialPriceVersion, MaterialVersion};
 use rusqlite::Connection;
@@ -10,10 +10,13 @@ use serde::{Deserialize, Serialize};
 mod correction_tests;
 mod frozen10;
 mod frozen11;
+mod frozen12;
 mod frozen6;
 mod frozen7;
 mod frozen8;
 mod frozen9;
+#[cfg(test)]
+mod purchase_return_tests;
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -226,13 +229,13 @@ struct SnapshotStateV5 {
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct SnapshotV2Schema12 {
+struct SnapshotV2Schema13 {
     format_version: u32,
     schema_version: i64,
     sequence: String,
     request_id: String,
     recorded_at: String,
-    state: SnapshotStateV12,
+    state: SnapshotStateV13,
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -289,7 +292,7 @@ struct SnapshotStateV7 {
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct SnapshotStateV12 {
+struct SnapshotStateV13 {
     materials: Vec<Material>,
     material_versions: Vec<MaterialVersion>,
     material_heads: Vec<Head>,
@@ -341,6 +344,7 @@ struct SnapshotStateV12 {
     correction_projection_versions: Vec<correction::ProjectionVersionRow>,
     correction_projection_heads: Vec<correction::ProjectionHead>,
     correction_price_bases: Vec<correction::CorrectionPriceBasisRow>,
+    purchase_returns: Vec<crate::purchase_return::PurchaseReturnRecord>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -450,7 +454,7 @@ pub(super) fn encode(
     recorded_at: &str,
 ) -> Result<String, StoreError> {
     let state = read_current_state(connection)?;
-    let snapshot = SnapshotV2Schema12 {
+    let snapshot = SnapshotV2Schema13 {
         format_version: 2,
         schema_version: SCHEMA_VERSION,
         sequence: sequence.to_string(),
@@ -461,7 +465,7 @@ pub(super) fn encode(
     Ok(serde_json::to_string_pretty(&snapshot).map_err(unavailable)? + "\n")
 }
 
-fn read_current_state(connection: &Connection) -> Result<SnapshotStateV12, StoreError> {
+fn read_current_state(connection: &Connection) -> Result<SnapshotStateV13, StoreError> {
     let old = read_catalog_state(connection)?;
     let rows = business::snapshot_rows(connection)?;
     let orders = purchase_order::order_snapshot_rows(connection)?;
@@ -471,7 +475,7 @@ fn read_current_state(connection: &Connection) -> Result<SnapshotStateV12, Store
     let stocktakes = stocktake::snapshot_rows(connection)?;
     let reconciliations = reconciliation::snapshot_rows(connection)?;
     let corrections = correction::snapshot_rows(connection)?;
-    let state = SnapshotStateV12 {
+    let state = SnapshotStateV13 {
         materials: old.materials,
         material_versions: old.material_versions,
         material_heads: old.material_heads,
@@ -523,6 +527,7 @@ fn read_current_state(connection: &Connection) -> Result<SnapshotStateV12, Store
         correction_projection_versions: corrections.projection_versions,
         correction_projection_heads: corrections.projection_heads,
         correction_price_bases: corrections.price_bases,
+        purchase_returns: purchase_return::snapshot_rows(connection)?,
     };
     Ok(state)
 }
@@ -685,7 +690,13 @@ pub(super) fn validate_source(
             matching_sequence
         }
         (Some(2), Some(12)) => {
-            let current: SnapshotV2Schema12 = serde_json::from_str(payload).map_err(unavailable)?;
+            let frozen: frozen12::Snapshot = serde_json::from_str(payload).map_err(unavailable)?;
+            let matching_sequence = frozen.sequence == sequence.to_string();
+            validate_current_state(&frozen.into_state()?, sequence)?;
+            matching_sequence
+        }
+        (Some(2), Some(13)) => {
+            let current: SnapshotV2Schema13 = serde_json::from_str(payload).map_err(unavailable)?;
             validate_current_state(&current.state, sequence)?;
             current.sequence == sequence.to_string()
         }
@@ -697,7 +708,7 @@ pub(super) fn validate_source(
     Ok(())
 }
 
-fn validate_current_state(state: &SnapshotStateV12, sequence: i64) -> Result<(), StoreError> {
+fn validate_current_state(state: &SnapshotStateV13, sequence: i64) -> Result<(), StoreError> {
     for revision in &state.business_revisions {
         crate::business::normalize_business_payload(revision.payload.clone())
             .map_err(unavailable)?;
@@ -731,6 +742,7 @@ fn validate_current_state(state: &SnapshotStateV12, sequence: i64) -> Result<(),
         &state.holding_versions,
         &state.holding_heads,
         &state.correction_projection_versions,
+        &state.purchase_returns,
     )?;
     let mutations: Vec<_> = state
         .mutation_requests
@@ -758,6 +770,12 @@ fn validate_current_state(state: &SnapshotStateV12, sequence: i64) -> Result<(),
         )
         .chain(state.receipts.iter().map(|r| r.confirmation_id.as_str()))
         .chain(state.wastes.iter().map(|r| r.confirmation_id.as_str()))
+        .chain(
+            state
+                .purchase_returns
+                .iter()
+                .map(|r| r.confirmation_id.as_str()),
+        )
         .chain(
             state
                 .stocktake_batches
@@ -843,6 +861,12 @@ fn validate_current_state(state: &SnapshotStateV12, sequence: i64) -> Result<(),
                 .map(|r| r.confirmation_id.as_str()),
         )
         .chain(state.wastes.iter().map(|r| r.confirmation_id.as_str()))
+        .chain(
+            state
+                .purchase_returns
+                .iter()
+                .map(|r| r.confirmation_id.as_str()),
+        )
         .collect();
     stocktake::validate_snapshot(stocktake::Validation {
         correction_projections: &state.correction_projection_versions,
@@ -885,12 +909,26 @@ fn validate_current_state(state: &SnapshotStateV12, sequence: i64) -> Result<(),
         production_inputs: &state.production_inputs,
         production_outputs: &state.production_outputs,
         wastes: &state.wastes,
+        purchase_returns: &state.purchase_returns,
         material_versions: &state.material_versions,
         business_records: &state.business_records,
         revisions: &state.business_revisions,
         confirmations: &state.business_confirmations,
         mutations: &sale_mutations,
         sequence,
+    })?;
+    purchase_return::validate_snapshot(purchase_return::Validation {
+        records: &state.purchase_returns,
+        receipts: &state.receipts,
+        holdings: &state.holding_versions,
+        observations: &state.stocktake_versions,
+        material_versions: &state.material_versions,
+        business_records: &state.business_records,
+        revisions: &state.business_revisions,
+        confirmations: &state.business_confirmations,
+        mutations: &sale_mutations,
+        sequence,
+        correction: Some(&correction_state),
     })?;
     correction::validate_snapshot(correction_state)?;
     waste::validate_snapshot(waste::Validation {
@@ -909,7 +947,7 @@ fn validate_current_state(state: &SnapshotStateV12, sequence: i64) -> Result<(),
 }
 
 fn correction_validation<'a>(
-    state: &'a SnapshotStateV12,
+    state: &'a SnapshotStateV13,
     mutations: &'a [(&'a str, &'a str, &'a str)],
     sequence: i64,
 ) -> correction::Validation<'a> {
@@ -942,6 +980,7 @@ fn correction_validation<'a>(
         consumption_rows: &state.consumption_rows,
         holdings: &state.holding_versions,
         wastes: &state.wastes,
+        purchase_returns: &state.purchase_returns,
         reconciliations: &state.receipt_reconciliations,
         inclusion_links: &state.inclusion_links,
         inclusion_link_versions: &state.inclusion_link_versions,

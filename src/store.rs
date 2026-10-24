@@ -18,6 +18,7 @@ mod holding;
 mod mutation;
 mod production;
 mod purchase_order;
+mod purchase_return;
 mod receipt;
 mod recipe;
 mod reconciliation;
@@ -27,7 +28,7 @@ mod snapshot;
 mod stocktake;
 mod waste;
 
-const SCHEMA_VERSION: i64 = 12;
+const SCHEMA_VERSION: i64 = 13;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Material {
@@ -183,6 +184,7 @@ impl Store {
     pub fn recover(&mut self) -> Result<(), StoreError> {
         reconciliation::validate_physical_columns(&self.connection)?;
         correction::validate_physical_columns(&self.connection)?;
+        purchase_return::validate_physical_columns(&self.connection)?;
         // Hold only record keys in memory; retained full-state payloads may be
         // much larger than the current material list.
         let entries: Vec<(i64, bool)> = self
@@ -325,6 +327,7 @@ fn validate_schema(connection: &Connection) -> anyhow::Result<()> {
     waste::validate_waste_schema(connection)?;
     reconciliation::validate_reconciliation_schema(connection)?;
     correction::validate_correction_schema(connection)?;
+    purchase_return::validate_purchase_return_schema(connection)?;
     let violation: Option<String> = connection
         .query_row("PRAGMA foreign_key_check", [], |row| row.get(0))
         .optional()?;
@@ -422,6 +425,9 @@ fn migrate(connection: &mut Connection, starting_version: i64) -> anyhow::Result
     }
     if version < 12 {
         schema::migrate_corrections(&transaction)?;
+    }
+    if version < 13 {
+        schema::migrate_purchase_returns(&transaction)?;
     }
     validate_schema(&transaction)?;
     transaction.commit()?;

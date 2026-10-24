@@ -1,3 +1,4 @@
+import { validPurchaseReturnShape } from './purchase-return.ts'
 import type { CorrectionPayload, CorrectionReplacement, CorrectionPlanRef } from '../types/correction.ts'
 import { validReceiptShape, validateReceiptDraft } from './receipt.ts'
 import { validProductionShape, validateProductionDraft } from './production.ts'
@@ -17,6 +18,7 @@ export function cloneCorrection<T>(value: T): T {
 }
 export function validCorrectionReplacement(value: unknown): value is CorrectionReplacement {
   if (!object(value) || !exact(value, ['kind', 'data']) || !object(value.data)) return false
+  if (value.kind === 'purchase_return') return validPurchaseReturnShape(value.data)
   if (value.kind === 'receipt') return receipt(value.data)
   if (value.kind === 'production') return validProductionShape(value.data) && Object.keys(validateProductionDraft({ kind: 'production', version: 1, data: value.data } as Parameters<typeof validateProductionDraft>[0])).length === 0
   if (value.kind === 'waste') return validWasteShape(value.data) && Object.keys(validateStocktakeDraft({ kind: 'waste', version: 1, data: value.data } as Parameters<typeof validateStocktakeDraft>[0])).length === 0
@@ -33,5 +35,5 @@ export function validCorrectionShape(value: unknown): boolean {
 export function validateCorrectionDraft(payload: CorrectionPayload): Record<string, string> {
   return validCorrectionShape(payload.data) ? {} : { reason: '입력 형식과 길이를 확인해 주세요. 정정 이유는 2000자, 수량·금액은 80자 이내입니다.' }
 }
-export const correctionKinds = { receipt: '입고', production: '생산', sale_count: '판매 개수', waste: '폐기 · 직원식', stocktake: '실사' }
+export const correctionKinds = { purchase_return: '구입 반품', receipt: '입고', production: '생산', sale_count: '판매 개수', waste: '폐기 · 직원식', stocktake: '실사' }
 export function correctionReferenceVersion(reference: CorrectionPlanRef) { return reference.kind === 'existing' ? reference.version_id : reference.expected_version_id }

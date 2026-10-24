@@ -8,6 +8,10 @@ use crate::{
         AllocationPercent, ProductionCheck, ProductionMaterialContext, project_production,
     },
     purchase_order::OrderStatus,
+    purchase_return::{
+        PurchaseReturnCheck, PurchaseReturnContext, PurchaseReturnSourceState,
+        calculate_purchase_return,
+    },
     receipt::{ReceiptSourceDraft, ReceiptStockEffectDraft, parse_receipt_date},
     reconciliation::{
         ReconciliationMaterialEffect, ValueActualAmounts, ValueDelta, ValueEventRef, ValueMaterial,
@@ -73,6 +77,7 @@ fn plan_id(reference: &CorrectionPlanRef) -> &str {
 fn entity(kind: CorrectionSubjectKind) -> CorrectionRefKind {
     match kind {
         CorrectionSubjectKind::Receipt => CorrectionRefKind::Receipt,
+        CorrectionSubjectKind::PurchaseReturn => CorrectionRefKind::PurchaseReturn,
         CorrectionSubjectKind::Production => CorrectionRefKind::Production,
         CorrectionSubjectKind::SaleCount => CorrectionRefKind::Sale,
         CorrectionSubjectKind::Waste => CorrectionRefKind::Waste,
@@ -121,6 +126,7 @@ struct Pass {
     issues: Vec<BusinessIssue>,
     reviews: Vec<CorrectionReviewRequest>,
     closures: BTreeMap<String, OrderReceiptPreview>,
+    returned: BTreeMap<String, i64>,
 }
 
 fn amounts(state: &CorrectionHoldingState) -> Result<Option<(Quantity, Money)>> {
@@ -942,6 +948,144 @@ fn run(
         let reference = event_ref(event, event_changed);
         let result = (|| -> Result<CorrectionEventValue> {
             match data {
+                CorrectionReplacementDraft::PurchaseReturn { data } => {
+                    let source_id = data
+                        .receipt_id
+                        .as_deref()
+                        .ok_or_else(|| bad("반품 원입고를 선택하세요"))?;
+                    let source_event = events
+                        .iter()
+                        .find(|source| {
+                            source.reference.kind == CorrectionSubjectKind::Receipt
+                                && source.reference.original_id == source_id
+                        })
+                        .ok_or_else(|| bad("반품 원입고가 없습니다"))?;
+                    if number(&source_event.reference.logical_seq)? >= seq {
+                        return Err(bad("반품보다 앞선 원입고를 선택하세요"));
+                    }
+                    let Some(CorrectionEventValue::Receipt {
+                        input: source_input,
+                        ..
+                    }) = pass.values.get(source_id).cloned()
+                    else {
+                        return Err(bad(format!(
+                            "반품 {}의 원입고 {}가 취소됐습니다. 관련 반품을 먼저 정정하거나 취소하세요",
+                            event.reference.original_id, source_id
+                        )));
+                    };
+                    let m = receipt_material(history, &source_input)?;
+                    if !event_changed
+                        && let Some(CorrectionEventValue::PurchaseReturn { result, .. }) =
+                            &event.effective_value
+                        && result.material_id != m.material_id
+                    {
+                        return Err(bad(format!(
+                            "원입고의 품목 변경이 반품 {}에 영향을 줍니다. 반품을 먼저 정정하거나 취소하세요",
+                            event.reference.original_id
+                        )));
+                    }
+                    if event_changed
+                        && data.expected_receipt_version_id.as_deref()
+                            != Some(source_event.reference.version_id.as_str())
+                    {
+                        return Err(bad("반품 원입고의 현재 버전을 명시적으로 확인하세요"));
+                    }
+                    let received = canonical(&source_input.quantity, &source_input.unit, m)?;
+                    let returned = pass.returned.get(source_id).copied().unwrap_or(0);
+                    if returned > received.micros() {
+                        return Err(bad(format!(
+                            "원입고 {} 수량이 기존 반품 합보다 작습니다",
+                            source_id
+                        )));
+                    }
+                    let requested = canonical(&data.quantity, &data.unit, m)?;
+                    let remaining =
+                        Quantity::from_micros(received.micros() - returned).map_err(range)?;
+                    if requested > remaining {
+                        return Err(bad(format!(
+                            "반품 {} 수량 {}{}이 원입고 {}의 남은 반품 한도 {}{}을 넘습니다. 해당 반품을 먼저 정정하거나 취소하세요",
+                            event.reference.original_id,
+                            requested.decimal(),
+                            m.canonical_unit,
+                            source_id,
+                            remaining.decimal(),
+                            m.canonical_unit,
+                        )));
+                    }
+                    let original = history
+                        .receipts
+                        .iter()
+                        .find(|r| r.id == source_id && number(&r.seq).is_ok_and(|at| at < seq))
+                        .ok_or_else(|| bad("반품 원입고의 불변 원기록이 없습니다"))?;
+                    let context = PurchaseReturnContext {
+                        original: original.clone(),
+                        source: PurchaseReturnSourceState {
+                            reference: event_ref(source_event, changed.contains(source_id)),
+                            material_id: m.material_id.clone(),
+                            material_version_id: m.id.clone(),
+                            material_name: m.name.clone(),
+                            unit: m.canonical_unit.clone(),
+                            quantity: received.decimal(),
+                            amount: money(&source_input.amount)?.decimal(),
+                            returned_quantity: Quantity::from_micros(returned)
+                                .map_err(range)?
+                                .decimal(),
+                            remaining_quantity: Quantity::from_micros(received.micros() - returned)
+                                .map_err(range)?
+                                .decimal(),
+                            logical_seq: source_event.reference.logical_seq.clone(),
+                            seq: source_event.reference.seq.clone(),
+                        },
+                        holding: holding(&pass, &m.material_id)?,
+                    };
+                    // Existing input keeps its historical CAS as evidence; only
+                    // the calculation view follows the effective stable source.
+                    let mut calculation_input = data.clone();
+                    calculation_input.expected_receipt_version_id =
+                        Some(source_event.reference.version_id.clone());
+                    let effect = match calculate_purchase_return(&calculation_input, &context)
+                        .map_err(range)?
+                    {
+                        PurchaseReturnCheck::Ready(effect) => effect,
+                        PurchaseReturnCheck::NeedsReconciliation(conflict) => {
+                            return Err(bad(conflict.message));
+                        }
+                    };
+                    let quantity = q(&effect.quantity)?;
+                    pass.returned.insert(
+                        source_id.into(),
+                        returned
+                            .checked_add(quantity.micros())
+                            .ok_or_else(|| bad("반품 합계 범위"))?,
+                    );
+                    write_state(
+                        &mut pass,
+                        &m.material_id,
+                        q(&effect.after.quantity)?,
+                        money(
+                            effect
+                                .after
+                                .value
+                                .as_deref()
+                                .ok_or_else(|| bad("반품 후 가치 없음"))?,
+                        )?,
+                        reference.clone(),
+                        &seq.to_string(),
+                        None,
+                    )?;
+                    pass.topology.push(ValueReplayEvent::PurchaseReturn {
+                        event: ValueEventRef {
+                            id: event.reference.original_id.clone(),
+                            seq,
+                        },
+                        material: value_material(m)?,
+                        quantity,
+                    });
+                    Ok(CorrectionEventValue::PurchaseReturn {
+                        input: data.clone(),
+                        result: *effect,
+                    })
+                }
                 CorrectionReplacementDraft::Receipt { data } => {
                     let m = receipt_material(history, data)?;
                     parse_receipt_date(&data.receipt_date, history.today).map_err(range)?;
@@ -1969,6 +2113,10 @@ fn clear_amount_references(value: &mut CorrectionEventValue) {
             }
         }
         CorrectionEventValue::Waste { result, .. } => {
+            clear(&mut result.before);
+            clear(&mut result.after);
+        }
+        CorrectionEventValue::PurchaseReturn { result, .. } => {
             clear(&mut result.before);
             clear(&mut result.after);
         }

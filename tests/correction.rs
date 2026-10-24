@@ -69,6 +69,7 @@ fn initial_history() -> CorrectionHistory {
         data: receipt("10", "100"),
     };
     CorrectionHistory {
+        receipts: vec![],
         as_of_revision: 4,
         today: NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
         events: vec![CorrectionHistoryEvent {
@@ -299,6 +300,244 @@ fn receipt_quantity_replacement_replays_original_position() {
     assert_eq!(check.plan.materials[0].value_delta, "0");
     assert_eq!(check.plan.target.logical_seq, "2");
     assert_eq!(h.events[0].reference.seq, "2");
+}
+
+fn return_input(quantity: &str) -> sunchang_hansang::purchase_return::DraftPurchaseReturnV1 {
+    sunchang_hansang::purchase_return::DraftPurchaseReturnV1 {
+        receipt_id: Some(id(10)),
+        expected_receipt_version_id: Some(id(10)),
+        quantity: quantity.into(),
+        unit: "g".into(),
+        note: "가상 반환".into(),
+    }
+}
+
+fn returned_history() -> CorrectionHistory {
+    let mut h = initial_history();
+    h.receipts.push(
+        serde_json::from_value(json!({
+            "id":id(10),"confirmation_id":id(110),"business_record_id":id(210),
+            "material_id":id(1),"material_version_id":id(2),"material_name":"가상 정정 품목",
+            "quantity":"10","unit":"g","input_quantity":"10","input_unit":"g",
+            "amount":"100","receipt_date":"2020-02-29","note":"","recorded_at":TIME,
+            "seq":"2","source":{"kind":"direct"}
+        }))
+        .unwrap(),
+    );
+    let result = serde_json::from_value(json!({
+        "source":{"reference":{"kind":"existing","entity":"receipt","id":id(10),"version_id":id(10)},
+            "original_quantity":"10","original_amount":"100","original_unit":"g",
+            "quantity":"10","amount":"100","returned_quantity":"0","remaining_quantity":"10"},
+        "material_id":id(1),"material_version_id":id(2),"material_name":"가상 정정 품목","unit":"g",
+        "input_quantity":"4","input_unit":"g","quantity":"4",
+        "before":{"quantity":"10","value":"100","source_id":id(10)},
+        "after":{"quantity":"6","value":"60","source_id":null},
+        "basis_before":{"kind":"receipt","id":id(10),"seq":"2"},
+        "observation":null,"deducted_value":"40"
+    })).unwrap();
+    let input = return_input("4");
+    let replacement = CorrectionReplacementDraft::PurchaseReturn {
+        data: input.clone(),
+    };
+    h.events.push(CorrectionHistoryEvent {
+        reference: reference(CorrectionSubjectKind::PurchaseReturn, 20, 3),
+        original_input: replacement.clone(),
+        effective_input: Some(replacement),
+        effective_value: Some(CorrectionEventValue::PurchaseReturn { input, result }),
+        observations: vec![],
+    });
+    let CorrectionHoldingState::Known {
+        amounts,
+        projection_seq,
+        last_valid_price,
+        ..
+    } = &mut h.actual_materials[0].state
+    else {
+        panic!()
+    };
+    amounts.quantity = "6".into();
+    amounts.value = Some("60".into());
+    *projection_seq = Some("3".into());
+    *last_valid_price = Some(price("60", "6", CorrectionRefKind::PurchaseReturn, 20, 3));
+    h
+}
+
+#[test]
+fn return_replace_and_void_replay_average_value_without_rewriting_original() {
+    let h = returned_history();
+    let original = serde_json::to_value(&h.events[1].original_input).unwrap();
+    let mut change = draft(CorrectionActionDraft::Replace {
+        replacement: CorrectionReplacementDraft::PurchaseReturn {
+            data: return_input("2"),
+        },
+    });
+    change.expected_target_version_id = Some(id(20));
+    let replacement = build_correction_plan(&h, &id(120), &change).unwrap();
+    assert!(replacement.issues.is_empty(), "{:?}", replacement.issues);
+    assert_eq!(replacement.plan.materials[0].quantity_delta, "2");
+    assert_eq!(replacement.plan.materials[0].value_delta, "20");
+    let after = replacement
+        .plan
+        .events
+        .iter()
+        .find(|e| e.reference.original_id == id(20))
+        .unwrap()
+        .after
+        .as_ref()
+        .unwrap();
+    let CorrectionEventValue::PurchaseReturn { result, .. } = after else {
+        panic!()
+    };
+    assert_eq!(result.deducted_value, "20");
+    assert_eq!(result.source.original_amount, "100");
+    change.action = CorrectionActionDraft::Void {};
+    let voided = build_correction_plan(&h, &id(120), &change).unwrap();
+    assert!(voided.issues.is_empty(), "{:?}", voided.issues);
+    assert_eq!(voided.plan.materials[0].quantity_delta, "4");
+    assert_eq!(voided.plan.materials[0].value_delta, "40");
+    assert_eq!(
+        serde_json::to_value(&h.events[1].original_input).unwrap(),
+        original
+    );
+}
+
+#[test]
+fn source_correction_keeps_return_audit_cas_and_original_purchase_amount() {
+    let h = returned_history();
+    let change = draft(CorrectionActionDraft::Replace {
+        replacement: CorrectionReplacementDraft::Receipt {
+            data: receipt("10", "200"),
+        },
+    });
+    let checked = build_correction_plan(&h, &id(110), &change).unwrap();
+    assert!(checked.issues.is_empty(), "{:?}", checked.issues);
+    assert_eq!(checked.plan.materials[0].quantity_delta, "0");
+    assert_eq!(checked.plan.materials[0].value_delta, "60");
+    let after = checked
+        .plan
+        .events
+        .iter()
+        .find(|e| e.reference.original_id == id(20))
+        .unwrap()
+        .after
+        .as_ref()
+        .unwrap();
+    let CorrectionEventValue::PurchaseReturn { input, result } = after else {
+        panic!()
+    };
+    assert_eq!(input.expected_receipt_version_id, Some(id(10)));
+    assert_eq!(result.source.original_amount, "100");
+    assert_eq!(result.source.amount, "200");
+    assert_eq!(result.deducted_value, "80");
+    assert!(matches!(
+        result.source.reference,
+        CorrectionPlanRef::Proposed {
+            entity: CorrectionRefKind::Receipt,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn source_shrink_or_void_is_blocked_until_the_dependent_return_is_revised() {
+    let h = returned_history();
+    for action in [
+        CorrectionActionDraft::Replace {
+            replacement: CorrectionReplacementDraft::Receipt {
+                data: receipt("3", "100"),
+            },
+        },
+        CorrectionActionDraft::Void {},
+    ] {
+        let checked = build_correction_plan(&h, &id(110), &draft(action)).unwrap();
+        assert!(!checked.issues.is_empty());
+        assert!(
+            checked
+                .issues
+                .iter()
+                .any(|i| i.message.contains(&id(20)) && i.message.contains(&id(10)))
+        );
+    }
+    let checked = build_correction_plan(
+        &h,
+        &id(110),
+        &draft(CorrectionActionDraft::Replace {
+            replacement: CorrectionReplacementDraft::Receipt {
+                data: receipt("3", "100"),
+            },
+        }),
+    )
+    .unwrap();
+    assert!(
+        checked
+            .issues
+            .iter()
+            .any(|i| i.message.contains("4g") && i.message.contains("3g"))
+    );
+}
+
+#[test]
+fn historical_return_cas_is_not_rechecked_but_an_explicit_replace_must_refresh_it() {
+    let mut h = returned_history();
+    h.events[0].reference.version_id = id(500);
+    h.events[0].reference.seq = "4".into();
+    let mut change = draft(CorrectionActionDraft::Replace {
+        replacement: CorrectionReplacementDraft::PurchaseReturn {
+            data: return_input("2"),
+        },
+    });
+    change.expected_target_version_id = Some(id(20));
+    let stale = build_correction_plan(&h, &id(120), &change).unwrap();
+    assert!(!stale.issues.is_empty());
+    let CorrectionActionDraft::Replace {
+        replacement: CorrectionReplacementDraft::PurchaseReturn { data },
+    } = &mut change.action
+    else {
+        panic!()
+    };
+    data.expected_receipt_version_id = Some(id(500));
+    let checked = build_correction_plan(&h, &id(120), &change).unwrap();
+    assert!(checked.issues.is_empty(), "{:?}", checked.issues);
+    assert_eq!(checked.plan.materials[0].quantity_delta, "2");
+}
+
+#[test]
+fn return_cannot_select_a_receipt_at_or_after_its_original_logical_position() {
+    let mut h = returned_history();
+    let mut later = h.events[0].clone();
+    later.reference = reference(CorrectionSubjectKind::Receipt, 40, 4);
+    later.original_input = CorrectionReplacementDraft::Receipt {
+        data: receipt("1", "10"),
+    };
+    later.effective_input = Some(later.original_input.clone());
+    h.events.push(later);
+    let mut record = h.receipts[0].clone();
+    record.id = id(40);
+    record.seq = "4".into();
+    record.quantity = "1".into();
+    record.amount = "10".into();
+    h.receipts.push(record);
+    let CorrectionHoldingState::Known {
+        amounts,
+        last_valid_price,
+        ..
+    } = &mut h.actual_materials[0].state
+    else {
+        panic!()
+    };
+    amounts.quantity = "7".into();
+    amounts.value = Some("70".into());
+    *last_valid_price = Some(price("70", "7", CorrectionRefKind::Receipt, 40, 4));
+    let mut data = return_input("1");
+    data.receipt_id = Some(id(40));
+    data.expected_receipt_version_id = Some(id(40));
+    let mut change = draft(CorrectionActionDraft::Replace {
+        replacement: CorrectionReplacementDraft::PurchaseReturn { data },
+    });
+    change.expected_target_version_id = Some(id(20));
+    let checked = build_correction_plan(&h, &id(120), &change).unwrap();
+    assert!(!checked.issues.is_empty());
+    assert!(checked.issues.iter().any(|i| i.message.contains("앞선")));
 }
 
 #[test]

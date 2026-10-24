@@ -94,7 +94,7 @@ fn accepts(value: &Value) -> Result<(), crate::store::StoreError> {
     validate_source(
         &value.to_string(),
         value["sequence"].as_str().unwrap().parse().unwrap(),
-        12,
+        crate::store::SCHEMA_VERSION,
     )
 }
 fn rejects(original: &Value, label: &str, change: impl FnOnce(&mut Value)) {

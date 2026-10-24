@@ -1,7 +1,7 @@
 use super::*;
 use crate::store::{
-    business, catalog, holding, production, purchase_order, receipt, reconciliation, sale,
-    stocktake, waste,
+    business, catalog, holding, production, purchase_order, purchase_return, receipt,
+    reconciliation, sale, stocktake, waste,
 };
 use crate::{
     business::BusinessPayload,
@@ -62,6 +62,11 @@ fn input(value: &CorrectionEventValue) -> CorrectionReplacementDraft {
         CorrectionEventValue::Waste { input, .. } => CorrectionReplacementDraft::Waste {
             data: input.clone(),
         },
+        CorrectionEventValue::PurchaseReturn { input, .. } => {
+            CorrectionReplacementDraft::PurchaseReturn {
+                data: input.clone(),
+            }
+        }
         CorrectionEventValue::Stocktake { input } => CorrectionReplacementDraft::Stocktake {
             data: input.clone(),
         },
@@ -328,6 +333,30 @@ pub(in crate::store) fn from_snapshot(
             observations: vec![],
         });
         sales.push(original);
+    }
+    for row in s.purchase_returns {
+        if number(&row.seq)? > at {
+            continue;
+        }
+        let BusinessPayload::PurchaseReturn { data, .. } = payload(s, &row.confirmation_id)? else {
+            return Err(unavailable("원반품 입력 종류 불일치"));
+        };
+        let value = CorrectionEventValue::PurchaseReturn {
+            input: data.clone(),
+            result: row.effect.clone(),
+        };
+        events.push(CorrectionHistoryEvent {
+            reference: reference(
+                s,
+                &row.confirmation_id,
+                CorrectionSubjectKind::PurchaseReturn,
+                &row.id,
+            )?,
+            original_input: input(&value),
+            effective_input: Some(input(&value)),
+            effective_value: Some(value),
+            observations: vec![],
+        });
     }
     for row in s.wastes {
         if number(&row.seq)? > at {
@@ -716,6 +745,12 @@ pub(in crate::store) fn from_snapshot(
             .cloned()
             .collect(),
         closures,
+        receipts: s
+            .receipts
+            .iter()
+            .filter(|r| r.seq.parse::<i64>().is_ok_and(|n| n <= at))
+            .cloned()
+            .collect(),
         sales,
         sale_versions: s
             .sale_versions
@@ -929,6 +964,7 @@ pub(super) fn load_at(
     let stocktake = stocktake::snapshot_rows(connection)?;
     let holdings = holding::versions(connection, None)?;
     let wastes = waste::snapshot_rows(connection)?;
+    let purchase_returns = purchase_return::snapshot_rows(connection)?;
     let reconciliations = reconciliation::snapshot_rows(connection)?;
     let sequence = number(&catalog::state(connection)?.revision)?;
     let view = Validation {
@@ -946,6 +982,7 @@ pub(super) fn load_at(
         orders: &orders,
         closures: &closures,
         receipts: &receipts,
+        purchase_returns: &purchase_returns,
         productions: &production.records,
         production_inputs: &production.inputs,
         production_outputs: &production.outputs,

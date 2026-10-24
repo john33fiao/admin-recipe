@@ -31,6 +31,7 @@ async function productionRow(group: 'inputs' | 'outputs', index?: number) {
 <template>
   <div class="correction-replacement-fields">
     <div v-if="replacement.kind === 'sale_count'" class="field"><label :for="`${prefix}-count`">정정할 판매 개수</label><input :id="`${prefix}-count`" v-model="replacement.data.count" :data-field="`${field}.count`" inputmode="numeric" :disabled="disabled"><p class="field-hint">0개도 기록할 수 있습니다. 당시 레시피·판매가·원가는 유지하며 연결된 실사의 판매 개수 배분을 다시 확인합니다. 고객 환불이나 실물 반환을 기록하지 않습니다.</p></div>
+    <PurchaseReturnFields v-else-if="replacement.kind === 'purchase_return'" v-model="replacement.data" :prefix="prefix" :field="field" :disabled="disabled"/>
     <CorrectionReceiptFields v-else-if="replacement.kind === 'receipt'" v-model="replacement.data" :prefix="prefix" :field="field" :disabled="disabled" :proposed="proposed"/>
     <template v-else-if="replacement.kind === 'production'">
       <p class="field-hint">실제 투입과 결과를 직접 수정하세요. 레시피나 수율로 실측량을 만들지 않습니다.</p>

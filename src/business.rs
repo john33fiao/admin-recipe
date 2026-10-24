@@ -9,6 +9,7 @@ use crate::{
         normalize_production_draft,
     },
     purchase_order::{OrderAction, OrderProposal, OrderVersion, normalize_order_draft},
+    purchase_return::{DraftPurchaseReturnV1, normalize_purchase_return_draft},
     receipt::{DraftReceiptV1, OrderReceiptPreview, normalize_receipt_draft},
     sale::{DraftSaleV1, SaleProposal, SaleVersion, normalize_sale_draft},
     stocktake::{DraftStocktakeV1, StocktakeRowEffect, normalize_stocktake_draft},
@@ -28,6 +29,7 @@ pub enum BusinessKind {
     Stocktake,
     Waste,
     Correction,
+    PurchaseReturn,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -124,6 +126,11 @@ pub enum BusinessPayload {
         version: u32,
         data: DraftCorrectionV1,
     },
+    PurchaseReturn {
+        #[serde(deserialize_with = "payload_version")]
+        version: u32,
+        data: DraftPurchaseReturnV1,
+    },
 }
 
 impl BusinessPayload {
@@ -137,6 +144,7 @@ impl BusinessPayload {
             Self::Stocktake { .. } => BusinessKind::Stocktake,
             Self::Waste { .. } => BusinessKind::Waste,
             Self::Correction { .. } => BusinessKind::Correction,
+            Self::PurchaseReturn { .. } => BusinessKind::PurchaseReturn,
         }
     }
     pub fn version(&self) -> u32 {
@@ -148,7 +156,8 @@ impl BusinessPayload {
             | Self::Sale { version, .. }
             | Self::Stocktake { version, .. }
             | Self::Waste { version, .. }
-            | Self::Correction { version, .. } => *version,
+            | Self::Correction { version, .. }
+            | Self::PurchaseReturn { version, .. } => *version,
         }
     }
 }
@@ -181,6 +190,7 @@ pub fn normalize_business_payload(
         BusinessPayload::Stocktake { data, .. } => normalize_stocktake_draft(data)?,
         BusinessPayload::Waste { data, .. } => normalize_waste_draft(data)?,
         BusinessPayload::Correction { data, .. } => normalize_correction_draft(data)?,
+        BusinessPayload::PurchaseReturn { data, .. } => normalize_purchase_return_draft(data)?,
     }
     Ok(payload)
 }
@@ -284,6 +294,9 @@ pub struct BusinessRevision {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum BusinessResult {
+    PurchaseReturn {
+        purchase_return_id: String,
+    },
     Correction {
         correction_id: String,
         original_id: String,
@@ -397,6 +410,9 @@ pub struct BusinessMutation {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum BusinessEffect {
+    PurchaseReturn {
+        purchase_return: Box<crate::purchase_return::PurchaseReturnEffect>,
+    },
     Correction {
         correction: Box<crate::correction::CorrectionPlan>,
     },

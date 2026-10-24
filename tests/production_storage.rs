@@ -310,7 +310,7 @@ fn schema_seven_open_adds_production_relations_without_rewriting_retained_data()
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
     assert_eq!(
-        new_schema, 12,
+        new_schema, 13,
         "opening schema7 must install current storage"
     );
     for table in [

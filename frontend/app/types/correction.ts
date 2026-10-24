@@ -1,3 +1,4 @@
+import type { DraftPurchaseReturnV1, PurchaseReturnEffect } from './purchase-return'
 import type { BusinessConfirmation } from './business'
 import type { CatalogState, ResolvedPrice } from './material'
 import type { ProductionPayload, ProductionPreview } from './production'
@@ -9,7 +10,7 @@ import type { WastePayload, WasteEffect } from './waste'
 
 export type ObservationCorrectionAction = { kind: 'void' } | { kind: 'replace'; quantity: string; unit: string; initial_value: StocktakeValueDraft | null; excess: StocktakeExcessDraft | null }
 export interface StocktakeCorrectionRow { observation_id: string | null; expected_version_id: string | null; action: ObservationCorrectionAction }
-export type CorrectionReplacement = { kind: 'receipt'; data: ReceiptPayload['data'] } | { kind: 'production'; data: ProductionPayload['data'] } | { kind: 'sale_count'; data: { count: string } } | { kind: 'waste'; data: WastePayload['data'] } | { kind: 'stocktake'; data: { rows: StocktakeCorrectionRow[] } }
+export type CorrectionReplacement = { kind: 'purchase_return'; data: DraftPurchaseReturnV1 } | { kind: 'receipt'; data: ReceiptPayload['data'] } | { kind: 'production'; data: ProductionPayload['data'] } | { kind: 'sale_count'; data: { count: string } } | { kind: 'waste'; data: WastePayload['data'] } | { kind: 'stocktake'; data: { rows: StocktakeCorrectionRow[] } }
 export interface ObservationReview { observation_id: string | null; expected_version_id: string | null; initial_value: StocktakeValueDraft | null; excess: StocktakeExcessDraft | null }
 export interface LinkedReceiptChange { receipt_id: string | null; expected_version_id: string | null; action: { kind: 'void' } | { kind: 'replace'; data: ReceiptPayload['data'] } }
 export interface DraftCorrectionV1 {
@@ -23,11 +24,11 @@ export interface CorrectionEventRef {
   kind: CorrectionSubjectKind; original_id: string; original_confirmation_id: string; confirmation_id: string; version_id: string
   business_record_id: string; logical_seq: string; logical_position: number; original_recorded_at: string; recorded_at: string; seq: string
 }
-export type CorrectionRefKind = 'receipt' | 'production' | 'sale' | 'waste' | 'stocktake' | 'observation' | 'inclusion_link' | 'material' | 'price_basis'
+export type CorrectionRefKind = 'purchase_return' | 'receipt' | 'production' | 'sale' | 'waste' | 'stocktake' | 'observation' | 'inclusion_link' | 'material' | 'price_basis'
 export type CorrectionPlanRef = { kind: 'existing'; entity: CorrectionRefKind; id: string; version_id: string } | { kind: 'proposed'; entity: CorrectionRefKind; id: string; expected_version_id: string | null }
 export interface CorrectionInclusionSourceCandidate { source_key: ReceiptSourceKey; source_ref: CorrectionPlanRef; source_material_id: string; source_material_name: string; source_unit: string; source_quantity: string; reserved_source_share: SourceShare; remaining_source_share: SourceShare; available_share: SourceShare; available_quantity: string }
 export interface CorrectionInclusionCandidate { observation: CorrectionPlanRef; stocktake_id: string; material_id: string; material_version_id: string; material_name: string; unit: string; quantity: string; value: string; available_share: SourceShare; available_quantity: string; logical_seq: string; sources: CorrectionInclusionSourceCandidate[] }
-export type CorrectionEventValue = { kind: 'receipt'; input: ReceiptPayload['data']; reconciliation: ReconciledReceiptEffect | null } | { kind: 'production'; input: ProductionPayload['data']; result: ProductionPreview } | { kind: 'sale_count'; input: { count: string }; result: SaleProposal } | { kind: 'waste'; input: WastePayload['data']; result: WasteEffect } | { kind: 'stocktake'; input: { rows: StocktakeCorrectionRow[] } }
+export type CorrectionEventValue = { kind: 'purchase_return'; input: DraftPurchaseReturnV1; result: PurchaseReturnEffect } | { kind: 'receipt'; input: ReceiptPayload['data']; reconciliation: ReconciledReceiptEffect | null } | { kind: 'production'; input: ProductionPayload['data']; result: ProductionPreview } | { kind: 'sale_count'; input: { count: string }; result: SaleProposal } | { kind: 'waste'; input: WastePayload['data']; result: WasteEffect } | { kind: 'stocktake'; input: { rows: StocktakeCorrectionRow[] } }
 export interface CorrectionObservationBoundary { reference: CorrectionPlanRef; stocktake_id: string; logical_seq: string; observed_at: string; quantity: string }
 export interface CorrectionPriceBasis { amount: string; quantity: string; source: CorrectionPlanRef; logical_seq: string }
 export type CorrectionHoldingState = { kind: 'not_established' } | { kind: 'known'; amounts: HoldingAmounts; projection_seq: string | null; last_valid_price: CorrectionPriceBasis | null; observation_boundary: CorrectionObservationBoundary | null; initial_boundary: { reference: CorrectionPlanRef; logical_seq: string } | null }

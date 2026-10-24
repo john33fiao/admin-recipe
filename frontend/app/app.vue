@@ -43,6 +43,7 @@ function toggleTheme() {
       <NuxtLink to="/business" :aria-current="route.path === '/business' || route.path.startsWith('/business/') ? 'page' : undefined">업무 기록</NuxtLink>
       <NuxtLink to="/orders" :aria-current="route.path === '/orders' || route.path.startsWith('/orders/') ? 'page' : undefined">발주 내역</NuxtLink>
       <NuxtLink to="/receipts" :aria-current="route.path === '/receipts' || route.path.startsWith('/receipts/') ? 'page' : undefined">입고 기록</NuxtLink>
+      <NuxtLink to="/purchase-returns" :aria-current="route.path.startsWith('/purchase-returns') ? 'page' : undefined">구입 반품</NuxtLink>
       <NuxtLink to="/productions" :aria-current="route.path === '/productions' || route.path.startsWith('/productions/') ? 'page' : undefined">생산 기록</NuxtLink>
       <NuxtLink to="/stocktakes" :aria-current="route.path.startsWith('/stocktakes') ? 'page' : undefined">실사</NuxtLink>
       <NuxtLink to="/wastes" :aria-current="route.path.startsWith('/wastes') ? 'page' : undefined">폐기 · 직원식</NuxtLink>

@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { blankPurchaseReturnDraft } from '~/utils/purchase-return'
+import type { PurchaseReturnSource } from '~/types/purchase-return'
 import type { CorrectionSeed } from '~/types/correction'
 import { correctionDraftIdentity } from '~/utils/correction-draft'
 import { cloneCorrection } from '~/utils/correction'
@@ -60,6 +62,18 @@ async function loadSeed() {
       let entries: Array<[string, string]> = []
       try { entries = Object.entries(sessionStorage) } catch { /* The editor handles unavailable persistence. */ }
       nextIdentity = correctionDraftIdentity(nextCorrection, entries)
+    } else if (route.query.kind === 'purchase_return') {
+      const value = blankPurchaseReturnDraft()
+      const receiptId = typeof route.query.receipt_id === 'string' ? route.query.receipt_id : null
+      value.data.receipt_id = receiptId
+      if (receiptId) {
+        try {
+          const source = await apiRequest<PurchaseReturnSource>(`/api/receipts/${encodeURIComponent(receiptId)}/return-source`)
+          if (source.current?.reference.kind === 'existing') { value.data.expected_receipt_version_id = source.current.reference.version_id; value.data.unit = source.current.unit }
+        } catch { /* Keep the editor accessible to recover an immutable uncertain request. */ }
+      }
+      payload = value
+      nextIdentity = `new.purchase_return.${receiptId ?? 'blank'}`
     } else if (route.query.kind === 'sale') {
       const sale = blankSaleDraft()
       if (corrects.value) {
@@ -135,29 +149,30 @@ async function loadSeed() {
   } catch { if (generation === seedGeneration) seedFailure.value = '초안의 대상 기록을 확인하지 못했습니다. 최신 재료나 유효한 확정 기록에서 다시 열어 주세요.' }
 }
 watch([connection, filter, kind], () => { void load() }, { immediate: true })
-watch([connection, () => route.query.material, () => route.query.corrects, () => route.query.record, () => route.query.kind, () => route.query.action, () => route.query.order], () => { void loadSeed() }, { immediate: true })
+watch([connection, () => route.query.material, () => route.query.corrects, () => route.query.record, () => route.query.kind, () => route.query.action, () => route.query.order, () => route.query.receipt_id], () => { void loadSeed() }, { immediate: true })
 useHead({ title: '업무 기록 | 순창한상' })
 </script>
 
 <template>
-  <div class="page-heading"><div><h1>업무 기록</h1><p>작성 중인 가격·발주·입고·생산·판매·실사·폐기를 임시 저장하고, 확인한 내용을 확정하세요.</p></div><div class="button-row"><NuxtLink class="secondary-link" to="/business">가격 초안 작성</NuxtLink><NuxtLink class="secondary-link" to="/business?kind=purchase_order&amp;action=place">주문 초안 작성</NuxtLink><NuxtLink class="secondary-link" to="/business?kind=receipt">직접 입고 초안</NuxtLink><NuxtLink class="secondary-link" to="/business?kind=production">생산 초안 작성</NuxtLink><NuxtLink class="secondary-link" to="/business?kind=sale">판매 초안 작성</NuxtLink><NuxtLink class="secondary-link" to="/business?kind=stocktake">실사 초안 작성</NuxtLink><NuxtLink class="secondary-link" to="/business?kind=waste">폐기 · 직원식 초안</NuxtLink></div></div>
+  <div class="page-heading"><div><h1>업무 기록</h1><p>작성 중인 가격·발주·입고·반품·생산·판매·실사·폐기를 임시 저장하고, 확인한 내용을 확정하세요.</p></div><div class="button-row"><NuxtLink class="secondary-link" to="/business">가격 초안 작성</NuxtLink><NuxtLink class="secondary-link" to="/business?kind=purchase_order&amp;action=place">주문 초안 작성</NuxtLink><NuxtLink class="secondary-link" to="/business?kind=receipt">직접 입고 초안</NuxtLink><NuxtLink class="secondary-link" to="/business?kind=purchase_return">구입 반품 초안</NuxtLink><NuxtLink class="secondary-link" to="/business?kind=production">생산 초안 작성</NuxtLink><NuxtLink class="secondary-link" to="/business?kind=sale">판매 초안 작성</NuxtLink><NuxtLink class="secondary-link" to="/business?kind=stocktake">실사 초안 작성</NuxtLink><NuxtLink class="secondary-link" to="/business?kind=waste">폐기 · 직원식 초안</NuxtLink></div></div>
   <p v-if="seedFailure" class="notice warning" role="alert">{{ seedFailure }} <NuxtLink to="/business">새 가격 초안 작성</NuxtLink></p>
   <div class="business-workspace">
     <BusinessCorrectionEditor v-if="seed?.kind === 'correction' && correctionSeed" :key="identity" :identity="identity" :seed="correctionSeed" :initial="{ payload: seed, state: correctionSeed.state, recordId: null, headId: null, status: 'draft', corrects: correctionSeed.original.reference.original_confirmation_id, issues: [] }" :refresh="load" />
     <BusinessPriceEditor v-else-if="seed?.kind === 'catalog_price' && list" :key="identity" :identity="identity" :initial="{ payload: seed, state: list.state, recordId: null, headId: null, status: 'draft', corrects, issues: [] }" :refresh="load" />
     <BusinessOrderEditor v-else-if="seed?.kind === 'purchase_order' && list" :key="identity" :identity="identity" :initial="{ payload: seed, state: list.state, recordId: null, headId: null, status: 'draft', corrects: null, issues: [] }" :refresh="load" />
     <BusinessReceiptEditor v-else-if="seed?.kind === 'receipt' && list" :key="identity" :identity="identity" :initial="{ payload: seed, state: list.state, recordId: null, headId: null, status: 'draft', corrects: null, issues: [] }" :refresh="load" />
+    <BusinessPurchaseReturnEditor v-else-if="seed?.kind === 'purchase_return' && list" :key="identity" :identity="identity" :initial="{ payload: seed, state: list.state, recordId: null, headId: null, status: 'draft', corrects: null, issues: [] }" :refresh="load" />
     <BusinessProductionEditor v-else-if="seed?.kind === 'production' && list" :key="identity" :identity="identity" :initial="{ payload: seed, state: list.state, recordId: null, headId: null, status: 'draft', corrects: null, issues: [] }" :refresh="load" />
     <BusinessSaleEditor v-else-if="seed?.kind === 'sale' && list" :key="identity" :identity="identity" :initial="{ payload: seed, state: list.state, recordId: null, headId: null, status: 'draft', corrects, issues: [] }" :frozen="frozenSale" :refresh="load" />
     <BusinessStockEditor v-else-if="(seed?.kind === 'stocktake' || seed?.kind === 'waste') && list" :key="identity" :identity="identity" :initial="{ payload: seed, state: list.state, recordId: null, headId: null, status: 'draft', corrects: null, issues: [] }" :refresh="load" />
     <section class="business-list-panel" aria-labelledby="business-list-title" :aria-busy="loading">
       <div class="list-heading"><h2 id="business-list-title">저장된 업무</h2><button class="text-button" type="button" :disabled="loading || connection !== 'connected'" @click="load">다시 불러오기</button></div>
       <div class="field"><label for="business-filter">업무 상태</label><select id="business-filter" v-model="filter" :disabled="connection !== 'connected'"><option value="draft">임시 저장</option><option value="confirmed">확정</option><option value="archived">보관</option><option value="all">전체</option></select></div>
-      <div class="field"><label for="business-kind">업무 종류</label><select id="business-kind" v-model="kind" :disabled="connection !== 'connected'"><option value="">전체</option><option value="catalog_price">사전 가격</option><option value="purchase_order">발주 업무</option><option value="receipt">실제 입고</option><option value="production">실제 생산</option><option value="sale">판매</option><option value="stocktake">실사</option><option value="waste">폐기 · 직원식</option><option value="correction">확정 기록 정정</option></select></div>
+      <div class="field"><label for="business-kind">업무 종류</label><select id="business-kind" v-model="kind" :disabled="connection !== 'connected'"><option value="">전체</option><option value="catalog_price">사전 가격</option><option value="purchase_order">발주 업무</option><option value="receipt">실제 입고</option><option value="purchase_return">구입 반품</option><option value="production">실제 생산</option><option value="sale">판매</option><option value="stocktake">실사</option><option value="waste">폐기 · 직원식</option><option value="correction">확정 기록 정정</option></select></div>
       <p v-if="failure" class="notice warning" role="alert">{{ failure }}</p>
       <div v-if="!list" class="empty-state"><h3>업무 기록을 불러오고 있습니다</h3><p>앱에 연결되면 저장된 초안을 확인할 수 있습니다.</p></div>
       <div v-else-if="!list.items.length" class="empty-state"><h3>이 상태의 업무가 없습니다</h3><p>초안을 임시 저장하면 여기에서 이어서 작성할 수 있습니다.</p></div>
-      <ul v-else class="business-list"><li v-for="item in list.items" :key="item.id"><NuxtLink :to="`/business/${item.id}`"><div><strong>{{ item.material_name ?? '재료 확인 필요' }}</strong><span class="status-label">{{ businessStatuses[item.status] }}</span></div><p>{{ item.kind === 'correction' ? '확정 기록 정정' : item.kind === 'stocktake' ? '실사' : item.kind === 'waste' ? '폐기 · 직원식' : item.kind === 'sale' ? (item.corrects_confirmation_id ? '판매 개수 정정' : '판매') : item.kind === 'purchase_order' ? '발주 업무' : item.kind === 'receipt' ? '실제 입고' : item.kind === 'production' ? '실제 생산' : item.corrects_confirmation_id ? '가격 정정' : '사전 가격' }} · {{ item.id.slice(0, 8) }}</p><p v-if="item.issue_count" class="business-needs-input">입력 필요 {{ item.issue_count }}개</p><time>{{ formatCreatedAt(item.updated_at) }} 수정</time></NuxtLink></li></ul>
+      <ul v-else class="business-list"><li v-for="item in list.items" :key="item.id"><NuxtLink :to="`/business/${item.id}`"><div><strong>{{ item.material_name ?? '재료 확인 필요' }}</strong><span class="status-label">{{ businessStatuses[item.status] }}</span></div><p>{{ item.kind === 'purchase_return' ? '구입 반품' : item.kind === 'correction' ? '확정 기록 정정' : item.kind === 'stocktake' ? '실사' : item.kind === 'waste' ? '폐기 · 직원식' : item.kind === 'sale' ? (item.corrects_confirmation_id ? '판매 개수 정정' : '판매') : item.kind === 'purchase_order' ? '발주 업무' : item.kind === 'receipt' ? '실제 입고' : item.kind === 'production' ? '실제 생산' : item.corrects_confirmation_id ? '가격 정정' : '사전 가격' }} · {{ item.id.slice(0, 8) }}</p><p v-if="item.issue_count" class="business-needs-input">입력 필요 {{ item.issue_count }}개</p><time>{{ formatCreatedAt(item.updated_at) }} 수정</time></NuxtLink></li></ul>
     </section>
   </div>
 </template>

@@ -100,6 +100,7 @@ fn validate_identities(s: &Validation<'_>) -> Result<(), StoreError> {
             .map(|r| r.id.as_str()),
     );
     ids.extend(s.wastes.iter().map(|r| r.id.as_str()));
+    ids.extend(s.purchase_returns.iter().map(|r| r.id.as_str()));
     for r in s
         .orders
         .iter()

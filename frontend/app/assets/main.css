@@ -352,3 +352,13 @@ a.material-row:hover { background: var(--soft); }
   .receipt-inclusion-row { padding: 14px; }
   .receipt-reconciliation-result .reconciliation-fields > div { grid-template-columns: minmax(0, 1fr); gap: 5px; }
 }
+
+.return-source-context, .purchase-return-result > section { margin-block: 1.25rem; }
+.return-fields { display: grid; gap: .8rem; }
+.return-fields > div { display: grid; grid-template-columns: minmax(8rem, 1fr) minmax(0, 2fr); gap: .7rem; }
+.return-fields dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.return-fields dt { color: var(--muted); }
+.purchase-return-fields .quantity-fields > *, .purchase-return-result { min-width: 0; }
+@media (max-width: 480px) {
+  .purchase-return-detail .return-fields > div, .purchase-return-result .return-fields > div, .return-source-context .return-fields > div { grid-template-columns: minmax(0, 1fr); gap: .25rem; }
+}

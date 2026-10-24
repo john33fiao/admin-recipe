@@ -30,7 +30,7 @@ export interface ReconciliationMaterialEffect {
   basis_before: HoldingBasisRef | null; observation: HoldingObservation | null; value_delta: string; inflow_quantity: string; inflow_value: string
 }
 export interface ReconciliationValueTrace {
-  kind: 'inflow' | 'observation' | 'production' | 'waste'; event_id: string; seq: string; material_id: string
+  kind: 'inflow' | 'observation' | 'production' | 'waste' | 'purchase_return'; event_id: string; seq: string; material_id: string
   quantity_before: string; quantity_after: string; base_value_before: string; base_value_after: string
   proposed_value_before: string; proposed_value_after: string; base_closed_value: string; proposed_closed_value: string
 }

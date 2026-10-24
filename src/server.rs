@@ -10,6 +10,7 @@ use crate::{
     lifecycle::{Lifecycle, Policy},
     production::ProductionFilter,
     purchase_order::OrderFilter,
+    purchase_return::PurchaseReturnFilter,
     receipt::ReceiptFilter,
     recipe::{CopyRecipe, CreateRecipe, RecipeFilter, ReviseRecipe},
     sale::SaleFilter,
@@ -243,10 +244,16 @@ pub fn router(state: AppState) -> Router {
         .route("/api/stocktakes/{id}", get(stocktake_detail))
         .route("/api/wastes", get(waste_list))
         .route("/api/wastes/{id}", get(waste_detail))
+        .route("/api/purchase-returns", get(purchase_return_list))
+        .route("/api/purchase-returns/{id}", get(purchase_return_detail))
         .route("/api/orders", get(order_list))
         .route("/api/orders/{id}", get(order_detail))
         .route("/api/receipts", get(receipt_list))
         .route("/api/receipts/{id}", get(receipt_detail))
+        .route(
+            "/api/receipts/{id}/return-source",
+            get(purchase_return_source),
+        )
         .route(
             "/api/materials/{id}/receipt-inclusion-bases",
             get(receipt_inclusion_candidates),
@@ -789,6 +796,51 @@ async fn waste_list(
     Ok(Json(state.with_store(move |s| s.waste_list(filter)).await?))
 }
 
+async fn purchase_return_list(
+    State(state): State<AppState>,
+    input: Result<Query<PurchaseReturnFilter>, QueryRejection>,
+) -> Result<impl IntoResponse, ApiError> {
+    let Query(filter) = input
+        .map_err(|error| ApiError(StatusCode::BAD_REQUEST, error.body_text(), "validation"))?;
+    Ok(Json(
+        state
+            .with_store(move |s| s.purchase_return_list(filter))
+            .await?,
+    ))
+}
+async fn purchase_return_detail(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<impl IntoResponse, ApiError> {
+    let detail = state
+        .with_store(move |s| s.purchase_return_detail(&id))
+        .await?
+        .ok_or_else(|| {
+            ApiError(
+                StatusCode::NOT_FOUND,
+                "반품 내역을 찾을 수 없습니다.".into(),
+                "not_found",
+            )
+        })?;
+    Ok(Json(detail))
+}
+async fn purchase_return_source(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<impl IntoResponse, ApiError> {
+    let source = state
+        .with_store(move |s| s.purchase_return_source(&id))
+        .await?
+        .ok_or_else(|| {
+            ApiError(
+                StatusCode::NOT_FOUND,
+                "원입고 내역을 찾을 수 없습니다.".into(),
+                "not_found",
+            )
+        })?;
+    Ok(Json(source))
+}
+
 async fn waste_detail(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -1094,6 +1146,7 @@ async fn static_asset(_headers: HeaderMap, request: Request<Body>) -> Response {
         || path == "/sales"
         || path == "/stocktakes"
         || path == "/wastes"
+        || path == "/purchase-returns"
         || path == "/recipes"
         || path == "/recipes/new"
         || path
@@ -1119,6 +1172,9 @@ async fn static_asset(_headers: HeaderMap, request: Request<Body>) -> Response {
             .is_some_and(|id| uuid::Uuid::parse_str(id).is_ok())
         || path
             .strip_prefix("/wastes/")
+            .is_some_and(|id| uuid::Uuid::parse_str(id).is_ok())
+        || path
+            .strip_prefix("/purchase-returns/")
             .is_some_and(|id| uuid::Uuid::parse_str(id).is_ok())
         || path
             .strip_prefix("/corrections/")

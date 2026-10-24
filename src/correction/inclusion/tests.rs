@@ -146,6 +146,7 @@ impl Fixture {
         };
         Self {
             history: CorrectionHistory {
+                receipts: vec![],
                 as_of_revision: 10,
                 today: chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
                 events: vec![stocktake.clone()],

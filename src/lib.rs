@@ -6,6 +6,7 @@ pub mod holding;
 pub mod lifecycle;
 pub mod production;
 pub mod purchase_order;
+pub mod purchase_return;
 pub mod receipt;
 pub mod recipe;
 pub mod reconciliation;

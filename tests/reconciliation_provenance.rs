@@ -89,6 +89,26 @@ fn source_for(initial: &str) -> SourceKey {
         position: 0,
     }
 }
+
+#[test]
+fn purchase_return_reduces_live_shares_without_refunding_reserved_origin() {
+    let m = material("return-material", "g");
+    let events = vec![
+        initial("o1", 1, &m, "10"),
+        ValueReplayEvent::PurchaseReturn {
+            event: event("return", 2),
+            material: m.clone(),
+            quantity: q("4"),
+        },
+        observe("o2", 3, &m, "6", "0"),
+    ];
+    let reserved = fixed(&events, &[], request("o1", &m, "5"), "reserved");
+    let choices =
+        inclusion_availability(&events, std::slice::from_ref(&reserved), &m.material_id).unwrap();
+    assert_eq!(choices[1].available_quantity.decimal(), "3");
+    assert_eq!(choices[1].sources[0].remaining_share.numerator, "5");
+    assert!(resolve_inclusions(&events, &[reserved], &[request("o2", &m, "3.000001")]).is_err());
+}
 fn produce(
     id: &str,
     seq: i64,

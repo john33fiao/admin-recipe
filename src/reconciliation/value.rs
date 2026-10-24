@@ -116,6 +116,11 @@ pub enum ValueObservation {
 }
 #[derive(Debug, Clone)]
 pub enum ValueReplayEvent {
+    PurchaseReturn {
+        event: ValueEventRef,
+        material: ValueMaterial,
+        quantity: Quantity,
+    },
     Inflow {
         event: ValueEventRef,
         material: ValueMaterial,
@@ -143,6 +148,7 @@ pub enum ValueReplayEvent {
 impl ValueReplayEvent {
     pub fn event(&self) -> &ValueEventRef {
         match self {
+            Self::PurchaseReturn { event, .. } => event,
             Self::Inflow { event, .. }
             | Self::Observation { event, .. }
             | Self::Production { event, .. }
@@ -443,6 +449,28 @@ fn run(
                     material,
                     before,
                     (measured.micros() as i128, next),
+                    closed,
+                )?;
+            }
+            ValueReplayEvent::PurchaseReturn {
+                event,
+                material,
+                quantity,
+            } => {
+                let before = engine.before(material)?;
+                if quantity.micros() == 0 || quantity.micros() > before.q {
+                    return Err(invalid());
+                }
+                let closed = take_value(&before, quantity.micros())?;
+                engine.write(
+                    ReconciliationTraceKind::PurchaseReturn,
+                    event,
+                    material,
+                    before.clone(),
+                    (
+                        before.q as i128 - quantity.micros() as i128,
+                        before.v as i128 - closed as i128,
+                    ),
                     closed,
                 )?;
             }

@@ -192,7 +192,7 @@ fn schema_ten_migrates_all_holding_edges_and_replays_twenty_three_original_respo
     assert_eq!(
         db.pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0))
             .unwrap(),
-        12
+        13
     );
     for (t, (c, r)) in before {
         assert_eq!(table_rows(&db, &t, &c), r, "{t}");

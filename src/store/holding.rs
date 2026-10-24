@@ -43,6 +43,7 @@ pub(super) struct HoldingVersion {
     pub observation_version_id: Option<String>,
     pub baseline_observation_version_id: Option<String>,
     pub waste_id: Option<String>,
+    pub purchase_return_id: Option<String>,
     pub baseline_seq: String,
     pub quantity: String,
     pub value: String,
@@ -71,8 +72,8 @@ fn read_versions(
     material: Option<&str>,
     id: Option<&str>,
 ) -> Result<Vec<HoldingVersion>, StoreError> {
-    let rows=connection.prepare("SELECT id,material_id,material_version_id,previous_version_id,receipt_id,baseline_receipt_id,baseline_sequence,quantity_micros,value_micros,recorded_at,sequence,production_effect_id,baseline_production_effect_id,observation_version_id,baseline_observation_version_id,waste_id,reconciliation_effect_id,baseline_reconciliation_effect_id,correction_projection_id,baseline_correction_projection_id,last_valid_correction_price_id FROM holding_versions WHERE (?1 IS NULL OR material_id=?1) AND (?2 IS NULL OR id=?2) ORDER BY sequence,id").map_err(unavailable)?
-        .query_map(params![material,id], |r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,Option<String>>(3)?,r.get::<_,Option<String>>(4)?,r.get::<_,Option<String>>(5)?,r.get::<_,i64>(6)?,r.get::<_,i64>(7)?,r.get::<_,i64>(8)?,r.get::<_,String>(9)?,r.get::<_,i64>(10)?,r.get::<_,Option<String>>(11)?,r.get::<_,Option<String>>(12)?,r.get::<_,Option<String>>(13)?,r.get::<_,Option<String>>(14)?,r.get::<_,Option<String>>(15)?,r.get::<_,Option<String>>(16)?,r.get::<_,Option<String>>(17)?,r.get::<_,Option<String>>(18)?,r.get::<_,Option<String>>(19)?,r.get::<_,Option<String>>(20)?)))
+    let rows=connection.prepare("SELECT id,material_id,material_version_id,previous_version_id,receipt_id,baseline_receipt_id,baseline_sequence,quantity_micros,value_micros,recorded_at,sequence,production_effect_id,baseline_production_effect_id,observation_version_id,baseline_observation_version_id,waste_id,reconciliation_effect_id,baseline_reconciliation_effect_id,correction_projection_id,baseline_correction_projection_id,last_valid_correction_price_id,purchase_return_id FROM holding_versions WHERE (?1 IS NULL OR material_id=?1) AND (?2 IS NULL OR id=?2) ORDER BY sequence,id").map_err(unavailable)?
+        .query_map(params![material,id], |r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,Option<String>>(3)?,r.get::<_,Option<String>>(4)?,r.get::<_,Option<String>>(5)?,r.get::<_,i64>(6)?,r.get::<_,i64>(7)?,r.get::<_,i64>(8)?,r.get::<_,String>(9)?,r.get::<_,i64>(10)?,r.get::<_,Option<String>>(11)?,r.get::<_,Option<String>>(12)?,r.get::<_,Option<String>>(13)?,r.get::<_,Option<String>>(14)?,r.get::<_,Option<String>>(15)?,r.get::<_,Option<String>>(16)?,r.get::<_,Option<String>>(17)?,r.get::<_,Option<String>>(18)?,r.get::<_,Option<String>>(19)?,r.get::<_,Option<String>>(20)?,r.get::<_,Option<String>>(21)?)))
         .map_err(unavailable)?.collect::<rusqlite::Result<Vec<_>>>().map_err(unavailable)?;
     rows.into_iter()
         .map(
@@ -98,6 +99,7 @@ fn read_versions(
                 correction_projection_id,
                 baseline_correction_projection_id,
                 last_valid_correction_price_id,
+                purchase_return_id,
             )| {
                 let correction_last_valid_price = last_valid_correction_price_id
                     .as_deref()
@@ -122,6 +124,7 @@ fn read_versions(
                     observation_version_id,
                     baseline_observation_version_id,
                     waste_id,
+                    purchase_return_id,
                     reconciliation_effect_id,
                     baseline_reconciliation_effect_id,
                     baseline_seq: baseline_seq.to_string(),
@@ -404,6 +407,7 @@ pub(super) fn apply_receipt(
             receipt_id: Some(receipt_id),
             production_effect_id: None,
             waste_id: None,
+            purchase_return_id: None,
             observation_version_id: None,
             reconciliation_effect_id: None,
             before: &before,
@@ -420,6 +424,7 @@ pub(super) struct AppendHolding<'a> {
     pub receipt_id: Option<&'a str>,
     pub production_effect_id: Option<&'a str>,
     pub waste_id: Option<&'a str>,
+    pub purchase_return_id: Option<&'a str>,
     pub observation_version_id: Option<&'a str>,
     pub reconciliation_effect_id: Option<&'a str>,
     pub before: &'a HoldingInput,
@@ -438,6 +443,7 @@ pub(super) fn append(
         receipt_id,
         production_effect_id,
         waste_id,
+        purchase_return_id,
         observation_version_id,
         reconciliation_effect_id,
         before,
@@ -516,7 +522,7 @@ pub(super) fn append(
     let last_is_correction=last.map(|last|connection.query_row("SELECT EXISTS(SELECT 1 FROM correction_price_bases WHERE id=?1 AND material_id=?2)",params![last,material_id],|r|r.get::<_,bool>(0)).map_err(unavailable)).transpose()?.unwrap_or(false);
     let last_price = if last_is_correction { last } else { None };
     let last_holding = if last_is_correction { None } else { last };
-    connection.execute("INSERT INTO holding_versions(id,material_id,material_version_id,previous_version_id,receipt_id,baseline_receipt_id,baseline_sequence,quantity_micros,value_micros,recorded_at,sequence,production_effect_id,baseline_production_effect_id,observation_version_id,baseline_observation_version_id,waste_id,reconciliation_effect_id,baseline_reconciliation_effect_id,baseline_correction_projection_id,last_valid_correction_price_id) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20)",params![id,material_id,material_version_id,before.source_id,receipt_id,baseline_receipt,boundary,q.micros(),v.micros(),time,seq,production_effect_id,baseline_production,observation_version_id,baseline_observation,waste_id,reconciliation_effect_id,baseline_reconciliation,baseline_correction,last_price]).map_err(unavailable)?;
+    connection.execute("INSERT INTO holding_versions(id,material_id,material_version_id,previous_version_id,receipt_id,baseline_receipt_id,baseline_sequence,quantity_micros,value_micros,recorded_at,sequence,production_effect_id,baseline_production_effect_id,observation_version_id,baseline_observation_version_id,waste_id,reconciliation_effect_id,baseline_reconciliation_effect_id,baseline_correction_projection_id,last_valid_correction_price_id,purchase_return_id) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21)",params![id,material_id,material_version_id,before.source_id,receipt_id,baseline_receipt,boundary,q.micros(),v.micros(),time,seq,production_effect_id,baseline_production,observation_version_id,baseline_observation,waste_id,reconciliation_effect_id,baseline_reconciliation,baseline_correction,last_price,purchase_return_id]).map_err(unavailable)?;
     connection.execute("INSERT INTO holding_heads(material_id,current_version_id,last_valid_version_id,last_valid_correction_price_id) VALUES(?1,?2,?3,?4) ON CONFLICT(material_id) DO UPDATE SET current_version_id=excluded.current_version_id,last_valid_version_id=excluded.last_valid_version_id,last_valid_correction_price_id=excluded.last_valid_correction_price_id,unknown_correction_projection_id=NULL",params![material_id,id,last_holding,last_price]).map_err(unavailable)?;
     Ok(id)
 }
@@ -646,6 +652,22 @@ impl Store {
                     }),
             );
             changes.sort_by_key(|c| c.seq().parse::<i64>().unwrap_or(-1));
+            changes.extend(
+                super::purchase_return::records(&self.connection, None, None)?
+                    .into_iter()
+                    .filter(|r| {
+                        r.effect.material_id == id
+                            && r.seq.parse::<i64>().ok() > first.seq.parse::<i64>().ok()
+                    })
+                    .map(|r| HoldingChange::PurchaseReturn {
+                        event_id: r.id,
+                        quantity: r.effect.quantity,
+                        deducted_value: r.effect.deducted_value,
+                        recorded_at: r.recorded_at,
+                        seq: r.seq,
+                    }),
+            );
+            changes.sort_by_key(|c| c.seq().parse::<i64>().unwrap_or(-1));
             view = project_holding(&baseline, &changes).map_err(unavailable)?;
             if first.correction_projection_id.is_some() {
                 view.basis = current.basis.clone();
@@ -699,6 +721,7 @@ pub(super) fn validate_holding_schema(connection: &Connection) -> anyhow::Result
         &versions,
         &heads,
         &super::correction::snapshot_rows(connection)?.projection_versions,
+        &super::purchase_return::snapshot_rows(connection)?,
     )?;
     for material in versions
         .iter()
@@ -767,8 +790,9 @@ pub(super) fn validate_snapshot_reconciled(
     versions: &[HoldingVersion],
     heads: &[HoldingHead],
     corrections: &[super::correction::ProjectionVersionRow],
+    purchase_returns: &[crate::purchase_return::PurchaseReturnRecord],
 ) -> Result<(), StoreError> {
-    if !corrections.is_empty() {
+    if !corrections.is_empty() || !purchase_returns.is_empty() {
         return validate_corrected_holdings(
             receipts,
             effects,
@@ -779,6 +803,7 @@ pub(super) fn validate_snapshot_reconciled(
             versions,
             heads,
             corrections,
+            purchase_returns,
         );
     }
     use std::collections::{BTreeMap, HashSet};
@@ -792,6 +817,7 @@ pub(super) fn validate_snapshot_reconciled(
             + effects.len()
             + observations.len()
             + wastes.len()
+            + purchase_returns.len()
             + reconciliation_effects.len()
     {
         return Err(bad());
@@ -1037,6 +1063,7 @@ fn validate_corrected_holdings(
     versions: &[HoldingVersion],
     heads: &[HoldingHead],
     corrections: &[super::correction::ProjectionVersionRow],
+    purchase_returns: &[crate::purchase_return::PurchaseReturnRecord],
 ) -> Result<(), StoreError> {
     use std::collections::HashSet;
     let bad = || unavailable("정정 이후 보유 원천·계산 경계·현재 값이 다릅니다");
@@ -1067,6 +1094,7 @@ fn validate_corrected_holdings(
             h.production_effect_id.is_some(),
             h.observation_version_id.is_some(),
             h.waste_id.is_some(),
+            h.purchase_return_id.is_some(),
             h.reconciliation_effect_id.is_some(),
             h.correction_projection_id.is_some(),
         ]
@@ -1178,6 +1206,38 @@ fn validate_corrected_holdings(
                         .micros(),
                     format!("observation:{id}"),
                 )
+            } else if let Some(id) = &h.purchase_return_id {
+                let r = purchase_returns
+                    .iter()
+                    .find(|r| &r.id == id)
+                    .ok_or_else(bad)?;
+                let crate::purchase_return::PurchaseReturnProjectionCheck::Ready(expected) =
+                    crate::purchase_return::project_purchase_return(
+                        &before,
+                        Quantity::parse(&r.effect.quantity).map_err(unavailable)?,
+                    )
+                    .map_err(unavailable)?
+                else {
+                    return Err(bad());
+                };
+                if expected.deducted_value != r.effect.deducted_value {
+                    return Err(bad());
+                }
+                (
+                    &r.effect.material_id,
+                    &r.effect.material_version_id,
+                    &r.recorded_at,
+                    &r.seq,
+                    Quantity::parse(&r.effect.quantity)
+                        .map_err(unavailable)?
+                        .micros(),
+                    Money::parse(&r.effect.deducted_value)
+                        .map_err(unavailable)?
+                        .micros(),
+                    0,
+                    0,
+                    format!("purchase_return:{id}"),
+                )
             } else if let Some(id) = &h.waste_id {
                 let w = wastes.iter().find(|w| &w.id == id).ok_or_else(bad)?;
                 (
@@ -1262,6 +1322,7 @@ fn validate_corrected_holdings(
                 .filter(|o| o.correction_projection_id.is_none())
                 .count()
             + wastes.len()
+            + purchase_returns.len()
             + reconciliation_effects.len()
     {
         return Err(bad());

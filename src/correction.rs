@@ -7,6 +7,9 @@ use crate::{
     holding::HoldingAmounts,
     production::{DraftProductionV1, ProductionPreview, normalize_production_draft},
     purchase_order::{OrderReceiptClosure, OrderVersion},
+    purchase_return::{
+        DraftPurchaseReturnV1, PurchaseReturnEffect, normalize_purchase_return_draft,
+    },
     receipt::{DraftReceiptV1, OrderReceiptPreview, normalize_receipt_draft},
     reconciliation::{ReceiptReconciliation, ReconciledReceiptEffect, SourceKey, SourceShare},
     sale::{SaleOriginal, SaleProposal, SaleVersion},
@@ -49,6 +52,7 @@ pub enum CorrectionActionDraft {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum CorrectionReplacementDraft {
+    PurchaseReturn { data: DraftPurchaseReturnV1 },
     Receipt { data: DraftReceiptV1 },
     Production { data: DraftProductionV1 },
     SaleCount { data: DraftSaleCountCorrectionV1 },
@@ -59,6 +63,7 @@ pub enum CorrectionReplacementDraft {
 impl CorrectionReplacementDraft {
     pub fn kind(&self) -> CorrectionSubjectKind {
         match self {
+            Self::PurchaseReturn { .. } => CorrectionSubjectKind::PurchaseReturn,
             Self::Receipt { .. } => CorrectionSubjectKind::Receipt,
             Self::Production { .. } => CorrectionSubjectKind::Production,
             Self::SaleCount { .. } => CorrectionSubjectKind::SaleCount,
@@ -164,6 +169,9 @@ pub fn normalize_correction_draft(data: &mut DraftCorrectionV1) -> Result<(), Do
     validate_draft_text(&data.reason, "정정 이유", 2000, true)?;
     if let CorrectionActionDraft::Replace { replacement } = &mut data.action {
         match replacement {
+            CorrectionReplacementDraft::PurchaseReturn { data } => {
+                normalize_purchase_return_draft(data)?
+            }
             CorrectionReplacementDraft::Receipt { data } => normalize_receipt_draft(data)?,
             CorrectionReplacementDraft::Production { data } => normalize_production_draft(data)?,
             CorrectionReplacementDraft::SaleCount { data } => {
@@ -210,6 +218,7 @@ pub fn normalize_correction_draft(data: &mut DraftCorrectionV1) -> Result<(), Do
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CorrectionSubjectKind {
+    PurchaseReturn,
     Receipt,
     Production,
     SaleCount,
@@ -236,6 +245,7 @@ pub struct CorrectionEventRef {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CorrectionRefKind {
+    PurchaseReturn,
     Receipt,
     Production,
     Sale,
@@ -323,6 +333,10 @@ pub struct CorrectionEventChange {
     reason = "Replay and persistence share these owned event snapshots; the enclosing business correction plan is boxed"
 )]
 pub enum CorrectionEventValue {
+    PurchaseReturn {
+        input: DraftPurchaseReturnV1,
+        result: PurchaseReturnEffect,
+    },
     Receipt {
         input: DraftReceiptV1,
         reconciliation: Option<ReconciledReceiptEffect>,
@@ -554,6 +568,7 @@ pub struct CorrectionHistory {
     pub as_of_revision: i64,
     pub today: chrono::NaiveDate,
     pub events: Vec<CorrectionHistoryEvent>,
+    pub receipts: Vec<crate::receipt::ReceiptRecord>,
     pub materials: Vec<MaterialVersion>,
     pub prices: Vec<MaterialPriceVersion>,
     pub orders: Vec<OrderVersion>,

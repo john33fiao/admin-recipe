@@ -353,6 +353,7 @@ pub(super) fn apply_production(
         holding::append(
             connection,
             holding::AppendHolding {
+                purchase_return_id: None,
                 material_id: &material.material_id,
                 material_version_id: &material.material_version_id,
                 receipt_id: None,

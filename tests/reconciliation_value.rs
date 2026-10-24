@@ -161,6 +161,35 @@ fn prior_replacement_is_replayed_once_and_later_observation_bv_stays_frozen() {
 }
 
 #[test]
+fn purchase_return_closes_its_average_share_of_later_value_adjustment() {
+    for (quantity, left, base, after, separate) in
+        [("4", "6", "6", "7.8", "1.2"), ("10", "0", "0", "0", "3")]
+    {
+        let input = history(
+            vec![
+                initial(1, "10", "10"),
+                ValueReplayEvent::PurchaseReturn {
+                    event: event(2),
+                    material: material(1),
+                    quantity: q(quantity),
+                },
+            ],
+            left,
+            base,
+        );
+        let result = replay_receipt_values(&input, &[replacement(1, "3", "6")]).unwrap();
+        assert_eq!(result.materials[0].after_value.decimal(), after);
+        assert_eq!(result.separate_adjustment.decimal(), separate);
+        assert!(
+            result
+                .trace
+                .iter()
+                .any(|t| t.kind == ReconciliationTraceKind::PurchaseReturn)
+        );
+    }
+}
+
+#[test]
 fn prior_unreflected_amount_is_only_a_normal_inflow_at_confirmation_time() {
     let mut input = history(
         vec![
