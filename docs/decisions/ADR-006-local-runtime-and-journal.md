@@ -50,7 +50,7 @@ v0 빈 DB→v1 재료/기록 테이블→v2 요청 UUID 테이블을 순차 생�
 
 `node scripts/build.mjs`가 UI 생성→입력/산출물 SHA-256 manifest→Cargo release를 실행한다. build.rs는 새 입력 경로를 포함한 소스 변경, 자산 삭제·변조를 거절한다. 생성물은 Git에서 제외하고 공개 복제본에서 재생성한다.
 
-2026-10-24 Windows 검사에서 release의 소스 위치 문자열에 개인 경로가 남는 것을 재현했다. 빌드 스크립트에서 홈·소스 경로를 치환하고 `node --test scripts/release-artifact.test.mjs`로 UTF-8/UTF-16LE 산출물 검사를 추가했다. 기존 실행파일에서 실패, 정상 재빌드 후 통과를 확인했다. Windows static CRT 설정은 유지한다. C/링커 등 별도 도구의 경로를 모두 치환한다고 가정하지 않고 최종 산출물을 검사한다. 이번 변경 후 실제 빌드는 Windows에서 수행했으며 Mac의 변경 후 빌드는 미검증이다.
+2026-10-24 Windows 검사에서 release의 소스 위치 문자열에 개인 경로가 남는 것을 재현했다. 빌드 스크립트에서 홈·소스 경로를 치환하고 `node --test scripts/release-artifact.test.mjs`로 UTF-8/UTF-16LE 산출물 검사를 추가했다. 기존 실행파일에서 실패, 정상 재빌드 후 통과를 확인했다. Windows static CRT 설정은 유지한다. C/링커 등 별도 도구의 경로를 모두 치환한다고 가정하지 않고 최종 산출물을 검사한다. Windows 후속 검증 뒤 같은 날짜에 macOS ARM64에서도 정상 빌드·산출물 검사를 통과했다. 환경·해시·회귀 범위는 T-001 검증 기록에 구분해 남긴다.
 
 검증 결과와 한계는 [T-001 검증 기록](../tickets/T-001-verification.md)에 둔다. macOS ARM64의 로컬 성공이 Windows·다른 Mac·다운로드 서명/공증·실제 절전의 성공을 뜻하지 않는다. 앱 교체 전 종료하고 db/ 전체를 보존한다. 예전 바이너리로 되돌리는 것만으로 DB 버전이 되돌아가지는 않는다.
 

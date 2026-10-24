@@ -4,7 +4,7 @@
 
 T-001의 Rust 서버·Nuxt 내장 UI와 재료 등록·저장·조회 흐름을 구현했다. 전체 운영 업무는 아직 구현하지 않았다. 기본 운영 기준은 [ADR-003](decisions/ADR-003-inventory-events-and-portable-data.md), 운영 예외의 최신 확정은 [ADR-004](decisions/ADR-004-inventory-exception-policies.md)이며, [ADR-002](decisions/ADR-002-first-release-and-local-storage.md)의 개발 단계·SQLite·서버 이관 방향은 유지한다.
 
-[ADR-005](decisions/ADR-005-rust-nuxt-local-server.md)에서 Rust·Nuxt, 로컬 서버·브라우저 자동 열기·WebSocket heartbeat 종료, 새 앱의 이전 DB 지원을 확정했다. 2026-10-24 D-12의 검증 대상은 Windows x64·macOS ARM64다. 앱 내부 업데이트와 Electron은 현재 범위에 넣지 않는다. [T-001](tickets/T-001-portable-local-app.md)은 Windows 후속 검증과 이전 macOS 부분 검증 상태이며 별도 장비 배포·실제 절전·OS 간 이동 기준이 남아 있다. 채택 구현은 [ADR-006](decisions/ADR-006-local-runtime-and-journal.md), 실행 결과는 [검증 기록](tickets/T-001-verification.md)을 따른다.
+[ADR-005](decisions/ADR-005-rust-nuxt-local-server.md)에서 Rust·Nuxt, 로컬 서버·브라우저 자동 열기·WebSocket heartbeat 종료, 새 앱의 이전 DB 지원을 확정했다. 2026-10-24 D-12의 검증 대상은 Windows x64·macOS ARM64다. 앱 내부 업데이트와 Electron은 현재 범위에 넣지 않는다. [T-001](tickets/T-001-portable-local-app.md)은 Windows 후속 검증과 최신 macOS 재검증을 수행했으며 별도 장비 배포·실제 절전 기준이 남아 있다. 같은 날짜 사용자 결정(D-12·D-13)으로 OS 간 데이터 왕복 검증만 백로그로 옮겨 완료 필수 조건에서 제외했다. 각 환경의 정상 동작과 같은 OS의 경로 이동 검증은 유지한다. 채택 구현은 [ADR-006](decisions/ADR-006-local-runtime-and-journal.md), 실행 결과는 [검증 기록](tickets/T-001-verification.md)을 따른다.
 
 ## 실행과 저장 경계
 
@@ -60,7 +60,7 @@ heartbeat는 복수 연결·재연결 유예·관측 공백을 구분하고 수�
 | 원가 | 잔량 0의 손실·반품 차액·여러 결과물·정밀도, 과거 입고일의 계산 적용 순서 |
 | 메뉴 | 복제 시 독립성·이름 충돌 처리, 메뉴별 재료 구성과 사용량 |
 | 저장 | 재료 흐름 스키마·JSON 기록/복구 구현. 향후 업무 스키마·정식 이전 버전별 회귀 검증 |
-| 복원·이동 | 선택 상태 전체 복원, 사진·JSON·DB 정합성, OS 간 읽기·복원 검증 |
+| 복원·이동 | 선택 상태 전체 복원, 사진·JSON·DB 정합성. OS 간 이동 지원 목표는 유지하며 실제 데이터 왕복 검증은 백로그 |
 | 설치·실행 | Windows·macOS 빌드·UI 내장·브라우저 열기·heartbeat 안전 종료, 수동 교체·바이너리 기준 경로 처리 |
 | 서버 전환 | 전환 조건·환경·계정·권한·이관 절차 |
 | 구현 기술 | 라이브러리 버전·빌드 자동화·검증 도구 채택 완료. OS별 배포 검증은 남음 |

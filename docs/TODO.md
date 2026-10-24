@@ -2,7 +2,7 @@
 
 ## 현재 단계
 
-기본 운영 결정은 [ADR-003](decisions/ADR-003-inventory-events-and-portable-data.md), O-01~O-04는 [ADR-004](decisions/ADR-004-inventory-exception-policies.md), Rust·Nuxt·로컬 실행·DB 호환 방향은 [ADR-005](decisions/ADR-005-rust-nuxt-local-server.md)에 반영했다. 현재 등록 티켓은 [T-001](tickets/T-001-portable-local-app.md) 하나다. 실행 기반과 재료 등록·SQLite/JSON 저장·조회는 구현했다. Windows x64 후속 검증과 이전 macOS ARM64 부분 검증을 구분해 기록한다. 별도 깨끗한 장비·실제 절전·OS 간 이동 등 필수 검증이 남아 티켓은 진행 중이다. 아래 후속 아이디어는 이번 구현 범위에 자동 포함하지 않았다.
+기본 운영 결정은 [ADR-003](decisions/ADR-003-inventory-events-and-portable-data.md), O-01~O-04는 [ADR-004](decisions/ADR-004-inventory-exception-policies.md), Rust·Nuxt·로컬 실행·DB 호환 방향은 [ADR-005](decisions/ADR-005-rust-nuxt-local-server.md)에 반영했다. 현재 등록 티켓은 [T-001](tickets/T-001-portable-local-app.md) 하나다. 실행 기반과 재료 등록·SQLite/JSON 저장·조회는 구현했다. Windows x64 후속 검증과 최신 macOS ARM64 재검증을 구분해 기록한다. 별도 깨끗한 장비·실제 절전 등 필수 검증이 남아 티켓은 진행 중이다. 2026-10-24 사용자 결정(D-12·D-13)으로 Windows↔macOS 데이터 왕복 검증만 백로그로 옮겼다. 현재는 각 환경의 정상 동작과 같은 OS의 경로 이동을 검증한다. 아래 후속 아이디어는 이번 구현 범위에 자동 포함하지 않았다.
 
 ## 결정·준비 완료
 
@@ -36,12 +36,12 @@
 - [ ] O-01에 따라 과거 입고일 보존·현재 시점 반영·이미 실시한 실사의 중복 방지 검증 (D-02, D-04)
 - [ ] 메뉴 복제 독립성·기본 이름 및 충돌 처리 설계 (D-09)
 - [ ] SQLite 스키마·JSON 기록 형식·db/ 경로·사진 참조·버전 정책 설계 (D-11)
-- [ ] 변경 기록 실패 대응, 전체 복원과 OS 간 데이터·사진 이동 검증 설계 (D-12~D-13)
+- [ ] 변경 기록 실패 대응, 사진 포함 전체 복원과 데이터 이동 절차 설계 (D-12~D-13)
 - [ ] Nuxt 정적 자산 내장·Windows/macOS 빌드·추가 실행 의존성 검증 (T-001)
 - [ ] heartbeat 재연결·복수 탭·절전 복귀·안전 종료 검증 (T-001)
 - [ ] 이전 DB 순차 마이그레이션·실패 복구·미래 버전 보호 및 과거 JSON 복원 설계
 - [ ] 확정 기능에 맞춰 GUI 설계. 기존 Figma는 참고안으로 사용
-- [x] 실제 실행·검증 명령과 Windows 후속/이전 macOS 결과·실환경 미검증을 README·T-001에 기록
+- [x] 실제 실행·검증 명령과 Windows 후속/최신 macOS 결과·실환경 미검증을 README·T-001에 기록
 - [x] 보안 경계·의존성 감사, 실행파일의 개인 빌드 경로 제거와 산출물 검사
 - [x] 재료 이름·관리 단위 입력 → SQLite/JSON 저장 → 목록·상세 조회 구현
 
@@ -52,6 +52,7 @@
 
 ## 백로그
 
+- [ ] Windows↔macOS 데이터 왕복 검증 — 2026-10-24 사용자 결정(D-12·D-13). OS 간 이동 지원 목표는 유지하되 T-001 완료의 필수 차단 조건에서 제외한다. 같은 OS 경로 이동·별도 장비 배포·실제 절전 검증은 이 이관에 포함하지 않는다.
 - [ ] 시설 점검
 - [ ] 부분 입고
 - [ ] 보관 위치
