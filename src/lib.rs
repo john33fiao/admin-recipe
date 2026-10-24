@@ -1,5 +1,6 @@
 pub mod business;
 pub mod catalog;
+pub mod correction;
 pub mod domain;
 pub mod holding;
 pub mod lifecycle;

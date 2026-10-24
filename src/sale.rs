@@ -310,6 +310,21 @@ pub struct SaleSummary {
     pub recorded_at: String,
     pub updated_at: String,
     pub consumption_status: SaleConsumptionStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effective: Option<SaleEffectiveState>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum SaleEffectiveState {
+    Active {
+        version_id: String,
+        count: String,
+        amount: Option<String>,
+    },
+    Void {
+        version_id: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -329,6 +344,8 @@ pub struct SaleDetail {
     pub versions: Vec<SaleVersion>,
     pub consumption_status: SaleConsumptionStatus,
     pub consumption: Vec<SaleMaterialConsumption>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effective: Option<SaleEffectiveState>,
     pub state: CatalogState,
 }
 

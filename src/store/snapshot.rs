@@ -1,11 +1,15 @@
 use super::{
-    Material, SCHEMA_VERSION, StoreError, business, catalog, holding, production, purchase_order,
-    read_materials, receipt, recipe, reconciliation, sale, stocktake, unavailable, waste,
+    Material, SCHEMA_VERSION, StoreError, business, catalog, correction, holding, production,
+    purchase_order, read_materials, receipt, recipe, reconciliation, sale, stocktake, unavailable,
+    waste,
 };
 use crate::catalog::{CatalogState, MaterialPriceVersion, MaterialVersion};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
+#[cfg(test)]
+mod correction_tests;
 mod frozen10;
+mod frozen11;
 mod frozen6;
 mod frozen7;
 mod frozen8;
@@ -222,13 +226,13 @@ struct SnapshotStateV5 {
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct SnapshotV2Schema11 {
+struct SnapshotV2Schema12 {
     format_version: u32,
     schema_version: i64,
     sequence: String,
     request_id: String,
     recorded_at: String,
-    state: SnapshotStateV11,
+    state: SnapshotStateV12,
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -285,7 +289,7 @@ struct SnapshotStateV7 {
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct SnapshotStateV11 {
+struct SnapshotStateV12 {
     materials: Vec<Material>,
     material_versions: Vec<MaterialVersion>,
     material_heads: Vec<Head>,
@@ -331,6 +335,12 @@ struct SnapshotStateV11 {
     inclusion_link_heads: Vec<reconciliation::LinkHead>,
     inclusion_reservations: Vec<reconciliation::ReservationRow>,
     reconciliation_material_effects: Vec<reconciliation::MaterialEffectRow>,
+    correction_records: Vec<crate::correction::CorrectionRecord>,
+    correction_event_versions: Vec<correction::EventVersionRow>,
+    correction_event_heads: Vec<correction::EventHead>,
+    correction_projection_versions: Vec<correction::ProjectionVersionRow>,
+    correction_projection_heads: Vec<correction::ProjectionHead>,
+    correction_price_bases: Vec<correction::CorrectionPriceBasisRow>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -439,6 +449,19 @@ pub(super) fn encode(
     request_id: &str,
     recorded_at: &str,
 ) -> Result<String, StoreError> {
+    let state = read_current_state(connection)?;
+    let snapshot = SnapshotV2Schema12 {
+        format_version: 2,
+        schema_version: SCHEMA_VERSION,
+        sequence: sequence.to_string(),
+        request_id: request_id.into(),
+        recorded_at: recorded_at.into(),
+        state,
+    };
+    Ok(serde_json::to_string_pretty(&snapshot).map_err(unavailable)? + "\n")
+}
+
+fn read_current_state(connection: &Connection) -> Result<SnapshotStateV12, StoreError> {
     let old = read_catalog_state(connection)?;
     let rows = business::snapshot_rows(connection)?;
     let orders = purchase_order::order_snapshot_rows(connection)?;
@@ -447,7 +470,8 @@ pub(super) fn encode(
     let sales = sale::snapshot_rows(connection)?;
     let stocktakes = stocktake::snapshot_rows(connection)?;
     let reconciliations = reconciliation::snapshot_rows(connection)?;
-    let state = SnapshotStateV11 {
+    let corrections = correction::snapshot_rows(connection)?;
+    let state = SnapshotStateV12 {
         materials: old.materials,
         material_versions: old.material_versions,
         material_heads: old.material_heads,
@@ -493,16 +517,14 @@ pub(super) fn encode(
         inclusion_link_heads: reconciliations.heads,
         inclusion_reservations: reconciliations.reservations,
         reconciliation_material_effects: reconciliations.effects,
+        correction_records: corrections.records,
+        correction_event_versions: corrections.event_versions,
+        correction_event_heads: corrections.event_heads,
+        correction_projection_versions: corrections.projection_versions,
+        correction_projection_heads: corrections.projection_heads,
+        correction_price_bases: corrections.price_bases,
     };
-    let snapshot = SnapshotV2Schema11 {
-        format_version: 2,
-        schema_version: SCHEMA_VERSION,
-        sequence: sequence.to_string(),
-        request_id: request_id.into(),
-        recorded_at: recorded_at.into(),
-        state,
-    };
-    Ok(serde_json::to_string_pretty(&snapshot).map_err(unavailable)? + "\n")
+    Ok(state)
 }
 
 pub(super) fn validate(payload: &str, sequence: i64) -> Result<(), StoreError> {
@@ -657,7 +679,13 @@ pub(super) fn validate_source(
             matching_sequence
         }
         (Some(2), Some(11)) => {
-            let current: SnapshotV2Schema11 = serde_json::from_str(payload).map_err(unavailable)?;
+            let frozen: frozen11::Snapshot = serde_json::from_str(payload).map_err(unavailable)?;
+            let matching_sequence = frozen.sequence == sequence.to_string();
+            validate_current_state(&frozen.into_state()?, sequence)?;
+            matching_sequence
+        }
+        (Some(2), Some(12)) => {
+            let current: SnapshotV2Schema12 = serde_json::from_str(payload).map_err(unavailable)?;
             validate_current_state(&current.state, sequence)?;
             current.sequence == sequence.to_string()
         }
@@ -669,7 +697,7 @@ pub(super) fn validate_source(
     Ok(())
 }
 
-fn validate_current_state(state: &SnapshotStateV11, sequence: i64) -> Result<(), StoreError> {
+fn validate_current_state(state: &SnapshotStateV12, sequence: i64) -> Result<(), StoreError> {
     for revision in &state.business_revisions {
         crate::business::normalize_business_payload(revision.payload.clone())
             .map_err(unavailable)?;
@@ -702,6 +730,7 @@ fn validate_current_state(state: &SnapshotStateV11, sequence: i64) -> Result<(),
         &state.reconciliation_material_effects,
         &state.holding_versions,
         &state.holding_heads,
+        &state.correction_projection_versions,
     )?;
     let mutations: Vec<_> = state
         .mutation_requests
@@ -737,6 +766,7 @@ fn validate_current_state(state: &SnapshotStateV11, sequence: i64) -> Result<(),
         )
         .collect();
     production::validate_snapshot(production::Validation {
+        correction_projections: &state.correction_projection_versions,
         records: &state.productions,
         inputs: &state.production_inputs,
         outputs: &state.production_outputs,
@@ -772,7 +802,11 @@ fn validate_current_state(state: &SnapshotStateV11, sequence: i64) -> Result<(),
             )
         })
         .collect();
+    let correction_state = correction_validation(state, &sale_mutations, sequence);
     sale::validate_snapshot(sale::Validation {
+        correction_event_versions: &state.correction_event_versions,
+        correction_projections: &state.correction_projection_versions,
+        observations: &state.stocktake_versions,
         records: &state.sales,
         cost_rows: &state.sale_cost_rows,
         versions: &state.sale_versions,
@@ -811,6 +845,8 @@ fn validate_current_state(state: &SnapshotStateV11, sequence: i64) -> Result<(),
         .chain(state.wastes.iter().map(|r| r.confirmation_id.as_str()))
         .collect();
     stocktake::validate_snapshot(stocktake::Validation {
+        correction_projections: &state.correction_projection_versions,
+        correction_events: &state.correction_event_versions,
         batches: &state.stocktake_batches,
         observations: &state.stocktake_observations,
         versions: &state.stocktake_versions,
@@ -832,6 +868,7 @@ fn validate_current_state(state: &SnapshotStateV11, sequence: i64) -> Result<(),
         sequence,
     })?;
     reconciliation::validate_snapshot(reconciliation::Validation {
+        correction: Some(&correction_state),
         records: &state.receipt_reconciliations,
         links: &state.inclusion_links,
         versions: &state.inclusion_link_versions,
@@ -855,7 +892,9 @@ fn validate_current_state(state: &SnapshotStateV11, sequence: i64) -> Result<(),
         mutations: &sale_mutations,
         sequence,
     })?;
+    correction::validate_snapshot(correction_state)?;
     waste::validate_snapshot(waste::Validation {
+        correction_projections: &state.correction_projection_versions,
         records: &state.wastes,
         holdings: &state.holding_versions,
         observations: &state.stocktake_versions,
@@ -869,6 +908,71 @@ fn validate_current_state(state: &SnapshotStateV11, sequence: i64) -> Result<(),
     Ok(())
 }
 
+fn correction_validation<'a>(
+    state: &'a SnapshotStateV12,
+    mutations: &'a [(&'a str, &'a str, &'a str)],
+    sequence: i64,
+) -> correction::Validation<'a> {
+    correction::Validation {
+        records: &state.correction_records,
+        event_versions: &state.correction_event_versions,
+        event_heads: &state.correction_event_heads,
+        projection_versions: &state.correction_projection_versions,
+        projection_heads: &state.correction_projection_heads,
+        price_bases: &state.correction_price_bases,
+        business_records: &state.business_records,
+        revisions: &state.business_revisions,
+        confirmations: &state.business_confirmations,
+        materials: &state.material_versions,
+        prices: &state.material_prices,
+        orders: &state.purchase_order_versions,
+        closures: &state.order_receipt_closures,
+        receipts: &state.receipts,
+        productions: &state.productions,
+        production_inputs: &state.production_inputs,
+        production_outputs: &state.production_outputs,
+        production_effects: &state.production_effects,
+        sales: &state.sales,
+        sale_versions: &state.sale_versions,
+        sale_cost_rows: &state.sale_cost_rows,
+        stocktake_batches: &state.stocktake_batches,
+        observations: &state.stocktake_observations,
+        observation_versions: &state.stocktake_versions,
+        consumption_versions: &state.consumption_versions,
+        consumption_rows: &state.consumption_rows,
+        holdings: &state.holding_versions,
+        wastes: &state.wastes,
+        reconciliations: &state.receipt_reconciliations,
+        inclusion_links: &state.inclusion_links,
+        inclusion_link_versions: &state.inclusion_link_versions,
+        inclusion_reservations: &state.inclusion_reservations,
+        mutations,
+        sequence,
+    }
+}
+
+/// Supply the same complete historical evidence to physical-table checks and
+/// JSON checks without recursively invoking either validation pipeline.
+pub(super) fn with_correction_validation<T>(
+    connection: &Connection,
+    sequence: i64,
+    check: impl FnOnce(correction::Validation<'_>) -> Result<T, StoreError>,
+) -> Result<T, StoreError> {
+    let state = read_current_state(connection)?;
+    let mutations = state
+        .mutation_requests
+        .iter()
+        .map(|r| {
+            (
+                r.sequence.as_str(),
+                r.operation.as_str(),
+                r.request_id.as_str(),
+            )
+        })
+        .collect::<Vec<_>>();
+    check(correction_validation(&state, &mutations, sequence))
+}
+
 struct ReceiptReferences<'a> {
     business_records: &'a [business::Record],
     business_revisions: &'a [crate::business::BusinessRevision],
@@ -879,6 +983,113 @@ struct ReceiptReferences<'a> {
     receipts: &'a [crate::receipt::ReceiptRecord],
     reconciliations: &'a [crate::reconciliation::ReceiptReconciliation],
     purchase_order_versions: &'a [crate::purchase_order::OrderVersion],
+}
+
+#[cfg(test)]
+mod schema11_reader_tests {
+    use super::validate_source;
+    use serde_json::{Value, json};
+
+    fn fixture() -> Value {
+        serde_json::from_str(include_str!(
+            "../../tests/fixtures/snapshot-v2-schema11.json"
+        ))
+        .unwrap()
+    }
+    fn accepts(value: &Value) -> bool {
+        let seq = value["sequence"].as_str().unwrap().parse().unwrap();
+        validate_source(&value.to_string(), seq, 11).is_ok()
+    }
+
+    #[test]
+    fn schema11_keeps_normal_api_reconciliation_and_original_snapshot_intact() {
+        let original = include_str!("../../tests/fixtures/snapshot-v2-schema11.json");
+        let value = fixture();
+        assert!(accepts(&value));
+        assert_eq!(
+            value["state"]["receipt_reconciliations"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            value["state"]["inclusion_reservations"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(serde_json::from_str::<Value>(original).unwrap(), value);
+    }
+
+    #[test]
+    fn schema11_rejects_correction_business_and_future_source_version() {
+        let original = fixture();
+        let mut changed = original.clone();
+        changed["state"]["business_records"][0]["kind"] = json!("correction");
+        assert!(!accepts(&changed));
+        let mut changed = original.clone();
+        changed["state"]["business_revisions"][0]["payload"] = json!({
+            "kind":"correction", "version":1,
+            "data":{"reason":"가상 정정", "action":{"kind":"void"},
+                    "observation_reviews":[], "linked_receipt_changes":[]}
+        });
+        assert!(!accepts(&changed));
+        let mut changed = original;
+        changed["schema_version"] = json!(12);
+        assert!(!accepts(&changed));
+    }
+
+    #[test]
+    fn schema11_cannot_accept_correction_metadata_in_original_derived_rows() {
+        let original = fixture();
+        for path in [
+            "/state/holding_versions/0",
+            "/state/holding_heads/0",
+            "/state/stocktake_versions/0",
+            "/state/consumption_versions/0",
+            "/state/inclusion_link_versions/0",
+            "/state/inclusion_reservations/0",
+            "/state/receipt_reconciliations/0/effect",
+            "/state/reconciliation_material_effects/0/effect",
+        ] {
+            let mut changed = original.clone();
+            changed
+                .pointer_mut(path)
+                .unwrap()
+                .as_object_mut()
+                .unwrap()
+                .insert("correction_id".into(), Value::Null);
+            assert!(!accepts(&changed), "{path}");
+        }
+        let mut changed = original;
+        changed["state"]["holding_heads"][0]["current_version_id"] = Value::Null;
+        assert!(!accepts(&changed));
+    }
+
+    #[test]
+    fn schema11_keeps_nested_reconciliation_basis_and_source_shapes_closed() {
+        let original = fixture();
+        for path in [
+            "/state/receipt_reconciliations/0/effect/materials/0/basis_before",
+            "/state/receipt_reconciliations/0/effect/selections/0/portions/0/source_key",
+            "/state/inclusion_link_versions/0/portion/source_key",
+        ] {
+            let mut changed = original.clone();
+            changed
+                .pointer_mut(path)
+                .unwrap()
+                .as_object_mut()
+                .unwrap()
+                .insert("logical_seq".into(), json!("1"));
+            assert!(!accepts(&changed), "{path}");
+        }
+        let mut changed = original;
+        changed["state"]["receipt_reconciliations"][0]["effect"]["materials"][0]["basis_before"]
+            ["kind"] = json!("correction");
+        assert!(!accepts(&changed));
+    }
 }
 
 #[cfg(test)]

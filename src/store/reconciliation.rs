@@ -68,6 +68,7 @@ pub(super) struct SnapshotRows {
 }
 
 pub(super) struct Validation<'a> {
+    pub correction: Option<&'a super::correction::Validation<'a>>,
     pub records: &'a [ReceiptReconciliation],
     pub links: &'a [LinkRow],
     pub versions: &'a [LinkVersionRow],
@@ -156,6 +157,8 @@ pub(super) fn snapshot_rows(connection: &Connection) -> Result<SnapshotRows, Sto
 }
 
 struct History<'a> {
+    corrected: Option<&'a crate::correction::CorrectionEffectiveReplay>,
+    corrected_inputs: Option<&'a BTreeMap<String, crate::holding::HoldingInput>>,
     receipts: &'a [crate::receipt::ReceiptRecord],
     reconciliations: &'a [ReceiptReconciliation],
     holdings: &'a [holding::HoldingVersion],
@@ -169,6 +172,8 @@ struct History<'a> {
 }
 
 struct Loaded {
+    corrected: Option<crate::correction::CorrectionEffectiveReplay>,
+    corrected_inputs: BTreeMap<String, crate::holding::HoldingInput>,
     receipts: Vec<crate::receipt::ReceiptRecord>,
     reconciliations: Vec<ReceiptReconciliation>,
     holdings: Vec<holding::HoldingVersion>,
@@ -179,7 +184,9 @@ struct Loaded {
 }
 impl Loaded {
     fn read(connection: &Connection) -> Result<Self, StoreError> {
-        Ok(Self {
+        let mut loaded = Self {
+            corrected: None,
+            corrected_inputs: BTreeMap::new(),
             receipts: receipt::records(connection, None, None)?,
             reconciliations: records(connection)?,
             holdings: holding::versions(connection, None)?,
@@ -187,10 +194,49 @@ impl Loaded {
             production: production::snapshot_rows(connection)?,
             wastes: super::waste::records(connection, None, None)?,
             materials: catalog::versions(connection, None)?,
-        })
+        };
+        let count: i64 = connection
+            .query_row("SELECT COUNT(*) FROM correction_records", [], |r| r.get(0))
+            .map_err(unavailable)?;
+        if count > 0 {
+            let history = super::correction::effective_history(connection, chrono::NaiveDate::MAX)?;
+            let replay =
+                crate::correction::effective_correction_replay(&history).map_err(unavailable)?;
+            loaded.reconciliations = history
+                .existing_inclusions
+                .iter()
+                .map(|r| r.reconciliation.clone())
+                .collect();
+            loaded.stocktake.versions = replay
+                .observations
+                .iter()
+                .map(|o| {
+                    let original = loaded
+                        .stocktake
+                        .versions
+                        .iter()
+                        .find(|v| v.id == o.expected_version_id)
+                        .ok_or_else(|| unavailable("유효 관측 실제 버전이 없습니다"))?;
+                    let mut v = original.clone();
+                    v.effect = o.effect.clone();
+                    v.seq = o.logical_seq.to_string();
+                    Ok(v)
+                })
+                .collect::<Result<_, StoreError>>()?;
+            for material in &history.actual_materials {
+                loaded.corrected_inputs.insert(
+                    material.material_id.clone(),
+                    holding::current_input(connection, &material.material_id)?,
+                );
+            }
+            loaded.corrected = Some(replay);
+        }
+        Ok(loaded)
     }
     fn history(&self) -> History<'_> {
         History {
+            corrected: self.corrected.as_ref(),
+            corrected_inputs: self.corrected.as_ref().map(|_| &self.corrected_inputs),
             receipts: &self.receipts,
             reconciliations: &self.reconciliations,
             holdings: &self.holdings,
@@ -261,6 +307,9 @@ impl History<'_> {
             .ok_or_else(|| unavailable("보정 품목 버전이 없습니다"))
     }
     fn input(&self, id: &str, at: i64) -> Result<crate::holding::HoldingInput, StoreError> {
+        if let Some(inputs) = self.corrected_inputs {
+            return Ok(inputs.get(id).cloned().unwrap_or_default());
+        }
         let head = self
             .holdings
             .iter()
@@ -269,6 +318,9 @@ impl History<'_> {
         holding::input_from_history(self.holdings, self.observations, head)
     }
     fn events(&self, at: i64) -> Result<Vec<ValueReplayEvent>, StoreError> {
+        if let Some(replay) = self.corrected {
+            return Ok(replay.events.clone());
+        }
         let mut events = vec![];
         for r in self.receipts {
             let n = seq(&r.seq)?;
@@ -416,6 +468,9 @@ impl History<'_> {
         Ok(events)
     }
     fn reserved(&self, at: i64) -> Result<Vec<ReservedInclusion>, StoreError> {
+        if let Some(replay) = self.corrected {
+            return Ok(replay.reservations.clone());
+        }
         let mut out = vec![];
         for r in self
             .reconciliations
@@ -506,6 +561,28 @@ impl History<'_> {
                 })
             })
             .collect::<Result<_, StoreError>>()?;
+        let actual_heads = if let Some(inputs) = self.corrected_inputs {
+            inputs
+                .iter()
+                .filter_map(|(id, input)| input.quantity.map(|quantity| (id, input, quantity)))
+                .map(|(id, input, quantity)| {
+                    let m = self.current_material(id, at)?;
+                    Ok(ValueActualHead {
+                        material: material(id, &m.id, &m.canonical_unit)?,
+                        quantity,
+                        value: input
+                            .value
+                            .ok_or_else(|| unavailable("유효 보유 가치 없음"))?,
+                        holding_version_id: input
+                            .source_id
+                            .clone()
+                            .ok_or_else(|| unavailable("유효 보유 참조 없음"))?,
+                    })
+                })
+                .collect::<Result<Vec<_>, StoreError>>()?
+        } else {
+            actual_heads
+        };
         Ok(ValueReplayInput {
             at_revision: at,
             events,
@@ -740,7 +817,16 @@ fn calculate(
                 InclusionPortionEffect {
                     position,
                     source_key: p.source_key.clone(),
-                    source_version_id: p.source_version_id.clone(),
+                    source_version_id: history
+                        .corrected
+                        .and_then(|h| {
+                            h.source_refs.iter().find(|s| {
+                                s.source_key == p.source_key
+                                    && s.calculation_version_id == p.source_version_id
+                            })
+                        })
+                        .map(|s| s.actual_version_id.clone())
+                        .unwrap_or_else(|| p.source_version_id.clone()),
                     included_share: p.included_share.clone(),
                     reserved_source_share: p.reserved_source_share.clone(),
                     booked_value: booked_parts[position].decimal(),
@@ -1138,6 +1224,8 @@ pub(super) fn validate_snapshot(s: Validation<'_>) -> Result<(), StoreError> {
     use crate::receipt::{ReceiptSource, ReceiptStockEffectDraft};
     let bad = || unavailable("입고 보정·출처 예약·가치 재생 근거가 일치하지 않습니다");
     let history = History {
+        corrected: None,
+        corrected_inputs: None,
         receipts: s.receipts,
         reconciliations: s.records,
         holdings: s.holdings,
@@ -1176,6 +1264,72 @@ pub(super) fn validate_snapshot(s: Validation<'_>) -> Result<(), StoreError> {
             identifier(id)?;
         }
         let n = seq(&r.seq)?;
+        let corrected_history = s
+            .correction
+            .filter(|c| c.records.iter().any(|r| seq(&r.seq).is_ok_and(|v| v < n)))
+            .map(|c| super::correction::history_from_snapshot(c, n - 1, chrono::NaiveDate::MAX))
+            .transpose()?;
+        let corrected = corrected_history
+            .as_ref()
+            .map(crate::correction::effective_correction_replay)
+            .transpose()
+            .map_err(unavailable)?;
+        let corrected_inputs = if let (Some(ch), Some(c)) = (&corrected_history, s.correction) {
+            ch.actual_materials
+                .iter()
+                .map(|m| {
+                    Ok((
+                        m.material_id.clone(),
+                        holding::input_at(
+                            s.holdings,
+                            s.observations,
+                            c.projection_versions,
+                            &m.material_id,
+                            n - 1,
+                        )?,
+                    ))
+                })
+                .collect::<Result<BTreeMap<_, _>, StoreError>>()?
+        } else {
+            BTreeMap::new()
+        };
+        let corrected_observations = corrected
+            .as_ref()
+            .map(|replay| {
+                replay
+                    .observations
+                    .iter()
+                    .map(|o| {
+                        let mut v = s
+                            .observations
+                            .iter()
+                            .find(|v| v.id == o.expected_version_id)
+                            .ok_or_else(bad)?
+                            .clone();
+                        v.effect = o.effect.clone();
+                        v.seq = o.logical_seq.to_string();
+                        Ok(v)
+                    })
+                    .collect::<Result<Vec<_>, StoreError>>()
+            })
+            .transpose()?;
+        let corrected_reconciliations = corrected_history.as_ref().map(|h| {
+            h.existing_inclusions
+                .iter()
+                .map(|v| v.reconciliation.clone())
+                .collect::<Vec<_>>()
+        });
+        let history = History {
+            corrected: corrected.as_ref(),
+            corrected_inputs: corrected.as_ref().map(|_| &corrected_inputs),
+            observations: corrected_observations
+                .as_deref()
+                .unwrap_or(history.observations),
+            reconciliations: corrected_reconciliations
+                .as_deref()
+                .unwrap_or(history.reconciliations),
+            ..history
+        };
         if n > s.sequence
             || !ids.insert(&r.id)
             || !receipt_ids.insert(&r.receipt_id)
@@ -1451,17 +1605,31 @@ pub(super) fn validate_snapshot(s: Validation<'_>) -> Result<(), StoreError> {
     // Empty reconciliations still pass every relation/count/confirmed-tag check
     // above. Existing validators already cover ordinary history in old schemas.
     if !s.records.is_empty() {
-        replay_receipt_values(
-            &history.value_input(s.sequence, history.events(s.sequence)?)?,
-            &[],
-        )
-        .map_err(unavailable)?;
-        resolve_inclusions(
-            &history.events(s.sequence)?,
-            &history.reserved(s.sequence)?,
-            &[],
-        )
-        .map_err(unavailable)?;
+        if let Some(correction) = s.correction.filter(|c| !c.records.is_empty()) {
+            let effective = super::correction::history_from_snapshot(
+                correction,
+                s.sequence,
+                chrono::NaiveDate::MAX,
+            )?;
+            // This reconstructs knowledge-time values and checks the actual
+            // current projection. Raw original receipts are evidence, not the
+            // final quantity topology after replacement/void.
+            let replay =
+                crate::correction::effective_correction_replay(&effective).map_err(unavailable)?;
+            resolve_inclusions(&replay.events, &replay.reservations, &[]).map_err(unavailable)?;
+        } else {
+            replay_receipt_values(
+                &history.value_input(s.sequence, history.events(s.sequence)?)?,
+                &[],
+            )
+            .map_err(unavailable)?;
+            resolve_inclusions(
+                &history.events(s.sequence)?,
+                &history.reserved(s.sequence)?,
+                &[],
+            )
+            .map_err(unavailable)?;
+        }
     }
     Ok(())
 }
@@ -1549,6 +1717,9 @@ pub(super) fn validate_reconciliation_schema(connection: &Connection) -> anyhow:
     validate_physical_columns(connection)?;
     let rows = snapshot_rows(connection)?;
     let loaded = Loaded::read(connection)?;
+    // Operational views omit superseded observation versions. Validation must
+    // retain them to replay each original reconciliation at its own sequence.
+    let original_stocktake = stocktake::snapshot_rows(connection)?;
     let business = business::snapshot_rows(connection)?;
     let mutations = connection
         .prepare("SELECT sequence,operation,request_id FROM mutation_requests ORDER BY sequence")?
@@ -1565,32 +1736,35 @@ pub(super) fn validate_reconciliation_schema(connection: &Connection) -> anyhow:
         [],
         |r| r.get(0),
     )?;
-    validate_snapshot(Validation {
-        records: &rows.records,
-        links: &rows.links,
-        versions: &rows.versions,
-        heads: &rows.heads,
-        reservations: &rows.reservations,
-        effects: &rows.effects,
-        receipts: &loaded.receipts,
-        holdings: &loaded.holdings,
-        observations: &loaded.stocktake.versions,
-        observation_rows: &loaded.stocktake.observations,
-        observation_heads: &loaded.stocktake.heads,
-        productions: &loaded.production.records,
-        production_inputs: &loaded.production.inputs,
-        production_outputs: &loaded.production.outputs,
-        wastes: &loaded.wastes,
-        material_versions: &loaded.materials,
-        orders: &super::purchase_order::read_versions(connection, None, None, false)?,
-        business_records: &business.records,
-        revisions: &business.revisions,
-        confirmations: &business.confirmations,
-        mutations: &mutations
-            .iter()
-            .map(|(s, o, r)| (s.as_str(), o.as_str(), r.as_str()))
-            .collect::<Vec<_>>(),
-        sequence,
+    super::snapshot::with_correction_validation(connection, sequence, |correction| {
+        validate_snapshot(Validation {
+            correction: Some(&correction),
+            records: &rows.records,
+            links: &rows.links,
+            versions: &rows.versions,
+            heads: &rows.heads,
+            reservations: &rows.reservations,
+            effects: &rows.effects,
+            receipts: &loaded.receipts,
+            holdings: &loaded.holdings,
+            observations: &original_stocktake.versions,
+            observation_rows: &original_stocktake.observations,
+            observation_heads: &original_stocktake.heads,
+            productions: &loaded.production.records,
+            production_inputs: &loaded.production.inputs,
+            production_outputs: &loaded.production.outputs,
+            wastes: &loaded.wastes,
+            material_versions: &loaded.materials,
+            orders: &super::purchase_order::read_versions(connection, None, None, false)?,
+            business_records: &business.records,
+            revisions: &business.revisions,
+            confirmations: &business.confirmations,
+            mutations: &mutations
+                .iter()
+                .map(|(s, o, r)| (s.as_str(), o.as_str(), r.as_str()))
+                .collect::<Vec<_>>(),
+            sequence,
+        })
     })?;
     Ok(())
 }

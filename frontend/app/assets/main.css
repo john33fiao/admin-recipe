@@ -325,6 +325,29 @@ a.material-row:hover { background: var(--soft); }
 .reconciliation-fields dd { margin: 0; overflow-wrap: anywhere; }
 .reconciliation-material, .reconciliation-selection { padding-top: 18px; margin-top: 18px; border-top: 1px solid var(--line); }
 .reconciliation-trace .history-list { margin-top: 16px; }
+.correction-target, .correction-reviews { margin-block: 24px; padding-block: 18px; border-block: 1px solid var(--line); }
+.correction-target details, .correction-history details { margin-block: 14px; }
+.correction-replacement-fields > section { margin-block: 22px; }
+.correction-stocktake-row, .correction-production-row, .correction-review-row, .correction-linked-row, .correction-excess { min-width: 0; margin-block: 18px; padding: 20px; border: 1px solid var(--line); border-radius: 10px; }
+.correction-editor legend { font-weight: 650; padding-inline: 7px; }
+.correction-editor .checkbox-label { display: flex; align-items: flex-start; gap: 10px; margin-block: 12px; }
+.correction-editor .checkbox-label input { width: 20px; height: 20px; flex: 0 0 20px; margin-top: 3px; }
+.correction-comparison { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; }
+.correction-comparison > section { min-width: 0; padding: 18px; border: 1px solid var(--line); border-radius: 10px; }
+.correction-plan > section, .correction-impact { margin-block: 24px; }
+.correction-impact > h3, .correction-plan > section > h3 { margin-bottom: 14px; }
+.correction-plan dl > div, .correction-event-value dl > div { display: grid; grid-template-columns: minmax(90px, 140px) minmax(0, 1fr); gap: 14px; margin-block: 12px; }
+.correction-plan dt, .correction-event-value dt { color: var(--muted); }
+.correction-plan dd, .correction-event-value dd { margin: 0; }
+.correction-editor, .correction-plan, .correction-history { min-width: 0; overflow-wrap: anywhere; }
+.correction-editor select { text-overflow: ellipsis; }
+.correction-editor .quantity-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 140px), 1fr)); gap: 16px; }
+.correction-comparison .production-result-columns { grid-template-columns: minmax(0, 1fr); }
+@media (max-width: 700px) { .correction-comparison { grid-template-columns: minmax(0, 1fr); gap: 14px; } }
+@media (max-width: 480px) {
+  .correction-stocktake-row, .correction-production-row, .correction-review-row, .correction-linked-row, .correction-excess, .correction-comparison > section { padding: 14px; }
+  .correction-plan dl > div, .correction-event-value dl > div { grid-template-columns: minmax(0, 1fr); gap: 5px; }
+}
 @media (max-width: 480px) {
   .receipt-inclusion-row { padding: 14px; }
   .receipt-reconciliation-result .reconciliation-fields > div { grid-template-columns: minmax(0, 1fr); gap: 5px; }

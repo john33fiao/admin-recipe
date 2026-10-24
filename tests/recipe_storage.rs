@@ -103,9 +103,20 @@ fn legacy_v6(root: &Path) -> Vec<(i64, String)> {
     rows
 }
 
-fn table_rows(database: &Connection, table: &str) -> Vec<Vec<SqlValue>> {
+fn table_rows(database: &Connection, table: &str, names: Option<&[String]>) -> Vec<Vec<SqlValue>> {
+    let selection = names
+        .map(|names| {
+            names
+                .iter()
+                .map(|name| format!("\"{name}\""))
+                .collect::<Vec<_>>()
+                .join(",")
+        })
+        .unwrap_or_else(|| "*".into());
     let mut statement = database
-        .prepare(&format!("SELECT * FROM \"{table}\" ORDER BY rowid"))
+        .prepare(&format!(
+            "SELECT {selection} FROM \"{table}\" ORDER BY rowid"
+        ))
         .unwrap();
     let columns = statement.column_count();
     statement
@@ -149,8 +160,15 @@ fn schema_six_open_adds_empty_recipe_relations_without_rewriting_retained_data()
     let before: BTreeMap<_, _> = names
         .into_iter()
         .map(|name| {
-            let rows = table_rows(&database, &name);
-            (name, rows)
+            let columns = database
+                .prepare(&format!("PRAGMA table_info(\"{name}\")"))
+                .unwrap()
+                .query_map([], |row| row.get::<_, String>(1))
+                .unwrap()
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .unwrap();
+            let rows = table_rows(&database, &name, Some(&columns));
+            (name, (columns, rows))
         })
         .collect();
     let old_schema: i64 = database
@@ -165,7 +183,7 @@ fn schema_six_open_adds_empty_recipe_relations_without_rewriting_retained_data()
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
     assert_eq!(
-        new_schema, 11,
+        new_schema, 12,
         "opening schema6 must install current storage"
     );
     for table in [
@@ -177,18 +195,15 @@ fn schema_six_open_adds_empty_recipe_relations_without_rewriting_retained_data()
         "production_outputs",
         "production_effects",
     ] {
-        assert!(table_rows(&database, table).is_empty(), "{table}");
+        assert!(table_rows(&database, table, None).is_empty(), "{table}");
     }
-    for (table, mut rows) in before {
-        if table == "holding_versions" {
-            // Schema8 adds two production references, schema10 adds three
-            // observation/waste references, and schema11 adds two reconciliation
-            // references. Original columns stay identical.
-            for row in &mut rows {
-                row.extend(std::iter::repeat_n(SqlValue::Null, 7));
-            }
-        }
-        assert_eq!(table_rows(&database, &table), rows, "{table}");
+    for (table, (columns, rows)) in before {
+        // Added projection metadata must not change any original column.
+        assert_eq!(
+            table_rows(&database, &table, Some(&columns)),
+            rows,
+            "{table}"
+        );
     }
     for (seq, payload) in journals {
         assert_eq!(
@@ -606,7 +621,7 @@ fn schema_six_requests_replay_exactly_and_holding_prices_feed_new_recipe_snapsho
     )
     .unwrap();
     assert_eq!(newest["format_version"], 2);
-    assert_eq!(newest["schema_version"], 11);
+    assert_eq!(newest["schema_version"], 12);
     for key in ["recipe_versions", "recipe_lines", "recipe_heads"] {
         assert_eq!(newest["state"][key].as_array().unwrap().len(), 1);
     }

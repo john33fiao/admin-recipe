@@ -207,6 +207,19 @@ pub fn router(state: AppState) -> Router {
         .route("/api/business/{id}/confirm", post(business_confirm))
         .route("/api/business/{id}/archive", post(business_archive))
         .route(
+            "/api/business/confirmations/{id}/correction-seed",
+            get(correction_seed),
+        )
+        .route("/api/corrections/{id}", get(correction_detail))
+        .route(
+            "/api/corrections/drafts",
+            post(correction_draft_create).layer(DefaultBodyLimit::max(256 * 1024)),
+        )
+        .route(
+            "/api/corrections/{id}/draft-revisions",
+            post(correction_draft_revise).layer(DefaultBodyLimit::max(256 * 1024)),
+        )
+        .route(
             "/api/production-drafts",
             post(production_draft_create).layer(DefaultBodyLimit::max(256 * 1024)),
         )
@@ -540,6 +553,81 @@ async fn business_archive(
         Json(
             state
                 .with_store(move |s| s.business_archive(&id, input))
+                .await?,
+        ),
+    ))
+}
+
+async fn correction_seed(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<impl IntoResponse, ApiError> {
+    let result = state
+        .with_store(move |s| s.correction_seed(&id))
+        .await?
+        .ok_or_else(|| {
+            ApiError(
+                StatusCode::NOT_FOUND,
+                "정정할 원기록을 찾을 수 없습니다.".into(),
+                "not_found",
+            )
+        })?;
+    Ok(Json(result))
+}
+
+async fn correction_detail(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<impl IntoResponse, ApiError> {
+    let result = state
+        .with_store(move |s| s.correction_detail(&id))
+        .await?
+        .ok_or_else(|| {
+            ApiError(
+                StatusCode::NOT_FOUND,
+                "정정 내역을 찾을 수 없습니다.".into(),
+                "not_found",
+            )
+        })?;
+    Ok(Json(result))
+}
+
+async fn correction_draft_create(
+    State(state): State<AppState>,
+    input: Result<Json<CreateBusinessDraft>, JsonRejection>,
+) -> Result<impl IntoResponse, ApiError> {
+    let input = json_input(input)?;
+    if input.payload.kind() != BusinessKind::Correction {
+        return Err(ApiError(
+            StatusCode::BAD_REQUEST,
+            "이 경로에는 정정 초안만 저장할 수 있습니다.".into(),
+            "validation",
+        ));
+    }
+    Ok((
+        StatusCode::CREATED,
+        Json(state.with_store(move |s| s.business_create(input)).await?),
+    ))
+}
+
+async fn correction_draft_revise(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    input: Result<Json<ReviseBusinessDraft>, JsonRejection>,
+) -> Result<impl IntoResponse, ApiError> {
+    let input = json_input(input)?;
+    if input.payload.kind() != BusinessKind::Correction {
+        return Err(ApiError(
+            StatusCode::BAD_REQUEST,
+            "이 경로에는 정정 초안만 저장할 수 있습니다.".into(),
+            "validation",
+        ));
+    }
+    Ok((
+        StatusCode::CREATED,
+        Json(
+            state
+                .with_store(move |s| s.business_revise(&id, input))
                 .await?,
         ),
     ))
@@ -1031,6 +1119,9 @@ async fn static_asset(_headers: HeaderMap, request: Request<Body>) -> Response {
             .is_some_and(|id| uuid::Uuid::parse_str(id).is_ok())
         || path
             .strip_prefix("/wastes/")
+            .is_some_and(|id| uuid::Uuid::parse_str(id).is_ok())
+        || path
+            .strip_prefix("/corrections/")
             .is_some_and(|id| uuid::Uuid::parse_str(id).is_ok())
         || path.strip_prefix("/recipes/").is_some_and(|part| {
             uuid::Uuid::parse_str(part).is_ok()

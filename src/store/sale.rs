@@ -2,7 +2,7 @@ use super::{Store, StoreError, business, catalog, holding, recipe, snapshot, una
 use crate::{
     business::{BusinessEffect, BusinessIssue, BusinessResult},
     catalog::{MaterialPriceVersion, MaterialVersion},
-    domain::{HoldingBasis, Money, Quantity, UnitPrice, resolve_price},
+    domain::{Money, Quantity, UnitPrice},
     recipe::{
         ExactRatio, RecipeCostInput, RecipeCostLineInput, RecipeRatioUnavailable, cost_recipe,
         parse_basis_count,
@@ -53,6 +53,9 @@ pub(super) struct SnapshotRows {
     pub heads: Vec<Head>,
 }
 pub(super) struct Validation<'a> {
+    pub correction_event_versions: &'a [super::correction::EventVersionRow],
+    pub correction_projections: &'a [super::correction::ProjectionVersionRow],
+    pub observations: &'a [super::stocktake::VersionRow],
     pub records: &'a [RecordRow],
     pub cost_rows: &'a [CostRow],
     pub versions: &'a [SaleVersion],
@@ -132,7 +135,7 @@ fn records(connection: &Connection, id: Option<&str>) -> Result<Vec<RecordRow>, 
         .collect()
 }
 fn cost_rows(connection: &Connection, sale_id: Option<&str>) -> Result<Vec<CostRow>, StoreError> {
-    let rows = connection.prepare("SELECT r.sale_id,r.position,r.recipe_line_id,l.material_id,l.material_version_id,m.name,l.quantity_micros,s.basis_count,l.unit,r.source_kind,COALESCE(r.holding_version_id,r.material_price_id),r.price_amount_micros,r.price_quantity_micros,r.missing_reason,r.cost_micros FROM sale_cost_rows r JOIN sales s ON s.id=r.sale_id JOIN recipe_lines l ON l.id=r.recipe_line_id JOIN material_versions m ON m.id=l.material_version_id WHERE (?1 IS NULL OR r.sale_id=?1) ORDER BY r.sale_id,r.position").map_err(unavailable)?
+    let rows = connection.prepare("SELECT r.sale_id,r.position,r.recipe_line_id,l.material_id,l.material_version_id,m.name,l.quantity_micros,s.basis_count,l.unit,r.source_kind,COALESCE(r.holding_version_id,r.material_price_id,r.correction_price_basis_id),r.price_amount_micros,r.price_quantity_micros,r.missing_reason,r.cost_micros FROM sale_cost_rows r JOIN sales s ON s.id=r.sale_id JOIN recipe_lines l ON l.id=r.recipe_line_id JOIN material_versions m ON m.id=l.material_version_id WHERE (?1 IS NULL OR r.sale_id=?1) ORDER BY r.sale_id,r.position").map_err(unavailable)?
         .query_map([sale_id],|r|Ok((r.get::<_,String>(0)?,r.get::<_,i64>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?,r.get::<_,String>(4)?,r.get::<_,String>(5)?,r.get::<_,i64>(6)?,r.get::<_,i64>(7)?,r.get::<_,String>(8)?,r.get::<_,String>(9)?,r.get::<_,Option<String>>(10)?,r.get::<_,Option<i64>>(11)?,r.get::<_,Option<i64>>(12)?,r.get::<_,Option<String>>(13)?,r.get::<_,Option<i64>>(14)?))).map_err(unavailable)?
         .collect::<rusqlite::Result<Vec<_>>>().map_err(unavailable)?;
     rows.into_iter()
@@ -241,7 +244,7 @@ fn heads(connection: &Connection) -> Result<Vec<Head>, StoreError> {
         .collect::<rusqlite::Result<_>>()
         .map_err(unavailable)
 }
-fn full_original(row: RecordRow, rows: Vec<SaleRecipeCostRow>) -> SaleOriginal {
+pub(super) fn full_original(row: RecordRow, rows: Vec<SaleRecipeCostRow>) -> SaleOriginal {
     let missing_price_line_ids = rows
         .iter()
         .filter(|r| r.price.source == SalePriceSource::Missing)
@@ -297,6 +300,7 @@ fn detail(connection: &Connection, id: &str) -> Result<Option<SaleDetail>, Store
     let consumption = consumption(connection, &item)?;
     let consumption_status = consumption_status(&consumption);
     Ok(Some(SaleDetail {
+        effective: super::correction::sale_effective(connection, id, i64::MAX)?,
         item,
         head,
         versions,
@@ -343,6 +347,12 @@ pub(super) fn check_correction(
     data: &DraftSaleV1,
 ) -> Result<(), StoreError> {
     let detail = target(connection, confirmation)?;
+    if detail.effective.is_some() {
+        return Err(StoreError::StaleState(
+            "통합 정정 이력이 있는 판매입니다. 원판매의 정정 화면에서 현재 유효 버전을 확인하세요"
+                .into(),
+        ));
+    }
     if detail.head.confirmation_id != confirmation {
         return Err(StoreError::StaleState(
             "대상 판매는 이미 정정되었습니다. 최신 확정을 확인하세요".into(),
@@ -439,6 +449,14 @@ pub(super) fn inspect_sale(
     };
     let previous = corrects.map(|id| target(connection, id)).transpose()?;
     let basis = if let Some(old) = &previous {
+        if old.effective.is_some() {
+            issue(
+                &mut issues,
+                "corrects_confirmation_id",
+                "requires_correction_flow",
+                "통합 정정 이력이 있는 판매입니다. 원판매의 정정 화면에서 현재 유효 버전을 확인하세요",
+            );
+        }
         let settled: bool=connection.query_row("SELECT EXISTS(SELECT 1 FROM consumption_rows r JOIN consumption_heads h ON h.current_version_id=r.consumption_version_id WHERE r.sale_id=?1)",[&old.item.id],|r|r.get(0)).map_err(unavailable)?;
         if settled {
             issue(
@@ -625,8 +643,21 @@ pub(super) fn apply_sale(
                 .transpose()
                 .map_err(unavailable)?
                 .map(|q| q.micros());
-            connection.execute("INSERT INTO sale_cost_rows(sale_id,position,recipe_line_id,source_kind,holding_version_id,material_price_id,price_amount_micros,price_quantity_micros,missing_reason,cost_micros) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
-                params![id,position as i64,row.line_id,source,holding,price,amount(&row.price.amount)?,q,row.price.reason,amount(&row.cost)?]).map_err(unavailable)?;
+            let corrected = if row.price.source == SalePriceSource::LastValid {
+                holding.filter(|id| {
+                    connection
+                        .query_row(
+                            "SELECT EXISTS(SELECT 1 FROM correction_price_bases WHERE id=?1)",
+                            [id],
+                            |r| r.get::<_, bool>(0),
+                        )
+                        .unwrap_or(false)
+                })
+            } else {
+                None
+            };
+            connection.execute("INSERT INTO sale_cost_rows(sale_id,position,recipe_line_id,source_kind,holding_version_id,material_price_id,price_amount_micros,price_quantity_micros,missing_reason,cost_micros,correction_price_basis_id) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+                params![id,position as i64,row.line_id,source,if corrected.is_some(){None}else{holding},price,amount(&row.price.amount)?,q,row.price.reason,amount(&row.cost)?,corrected]).map_err(unavailable)?;
         }
         id
     };
@@ -654,15 +685,18 @@ impl Store {
         {
             let sale = detail(&self.connection, &row.id)?
                 .ok_or_else(|| unavailable("판매 원본이 없습니다"))?;
-            amounts.push(
-                sale.head
-                    .amount
-                    .as_deref()
-                    .map(Money::parse)
-                    .transpose()
-                    .map_err(unavailable)?,
-            );
+            if !matches!(sale.effective, Some(SaleEffectiveState::Void { .. })) {
+                amounts.push(
+                    sale.head
+                        .amount
+                        .as_deref()
+                        .map(Money::parse)
+                        .transpose()
+                        .map_err(unavailable)?,
+                );
+            }
             items.push(SaleSummary {
+                effective: sale.effective,
                 id: row.id,
                 material_id: row.material_id,
                 material_name: row.material_name,
@@ -747,16 +781,49 @@ pub(super) fn consumption_sources(
     }
     Ok(sources)
 }
+/// Select real sale versions as of an actual revision while keeping original
+/// sale positions. A void correction removes the candidate, never fabricates 0.
+pub(super) fn consumption_sources_effective(
+    records: &[RecordRow],
+    cost_rows: &[CostRow],
+    versions: &[SaleVersion],
+    event_versions: &[super::correction::EventVersionRow],
+    as_of: i64,
+) -> Result<Vec<SaleConsumptionSource>, StoreError> {
+    let mut sources = consumption_sources(records, cost_rows, versions, as_of)?;
+    sources.retain(|source| {
+        event_versions
+            .iter()
+            .filter(|v| {
+                v.reference.kind == crate::correction::CorrectionSubjectKind::SaleCount
+                    && v.reference.original_id == source.sale_id
+                    && v.reference.seq.parse::<i64>().is_ok_and(|n| n <= as_of)
+            })
+            .max_by_key(|v| v.reference.seq.parse::<i64>().unwrap_or(0))
+            .is_none_or(|v| v.after.is_some())
+    });
+    Ok(sources)
+}
 pub(super) fn sources_at(
     connection: &Connection,
     as_of: i64,
 ) -> Result<Vec<SaleConsumptionSource>, StoreError> {
-    consumption_sources(
+    let mut sources = consumption_sources(
         &records(connection, None)?,
         &cost_rows(connection, None)?,
         &versions(connection, None)?,
         as_of,
-    )
+    )?;
+    let mut active = Vec::with_capacity(sources.len());
+    for source in sources.drain(..) {
+        if !matches!(
+            super::correction::sale_effective(connection, &source.sale_id, as_of)?,
+            Some(SaleEffectiveState::Void { .. })
+        ) {
+            active.push(source);
+        }
+    }
+    Ok(active)
 }
 fn consumption_status(rows: &[SaleMaterialConsumption]) -> SaleConsumptionStatus {
     if rows.is_empty() {
@@ -929,35 +996,13 @@ fn historical_price(
     material: &str,
     seq: i64,
 ) -> Result<SalePriceSnapshot, StoreError> {
-    let holdings = state
-        .holdings
-        .iter()
-        .filter(|h| h.material_id == material && sequence(&h.seq).is_ok_and(|s| s < seq))
-        .collect::<Vec<_>>();
-    let current = holdings
-        .iter()
-        .max_by_key(|h| sequence(&h.seq).unwrap_or(0));
-    let holding = match current {
-        Some(h) => HoldingBasis::Known {
-            quantity: Quantity::parse(&h.quantity).map_err(unavailable)?,
-            value: Money::parse(&h.value).map_err(unavailable)?,
-            source_id: h.id.clone(),
-        },
-        None => HoldingBasis::NotEstablished,
-    };
-    let last = holdings
-        .iter()
-        .filter(|h| Quantity::parse(&h.quantity).is_ok_and(|q| q.micros() > 0))
-        .max_by_key(|h| sequence(&h.seq).unwrap_or(0))
-        .map(|h| {
-            UnitPrice::new(
-                Money::parse(&h.value)?,
-                Quantity::parse(&h.quantity)?,
-                h.id.clone(),
-            )
-        })
-        .transpose()
-        .map_err(unavailable)?;
+    let input = holding::input_at(
+        state.holdings,
+        state.observations,
+        state.correction_projections,
+        material,
+        seq - 1,
+    )?;
     let preregistered = state
         .prices
         .iter()
@@ -972,8 +1017,10 @@ fn historical_price(
         })
         .transpose()
         .map_err(unavailable)?;
-    SalePriceSnapshot::from_resolved(resolve_price(holding, last, preregistered))
-        .map_err(unavailable)
+    SalePriceSnapshot::from_resolved(
+        crate::holding::resolve_holding_price(&input, preregistered).map_err(unavailable)?,
+    )
+    .map_err(unavailable)
 }
 pub(super) fn validate_snapshot(state: Validation<'_>) -> Result<(), StoreError> {
     use crate::business::{BusinessKind, BusinessPayload, BusinessStatus};
@@ -1167,6 +1214,48 @@ pub(super) fn validate_snapshot(state: Validation<'_>) -> Result<(), StoreError>
             identifier(&c.request_id)?;
             let record = records.get(&version.business_record_id).ok_or_else(bad)?;
             let revision = revisions.get(&c.revision_id).ok_or_else(bad)?;
+            if matches!(
+                &revision.payload,
+                BusinessPayload::Correction { version: 1, .. }
+            ) {
+                let derived = state
+                    .correction_event_versions
+                    .iter()
+                    .find(|e| {
+                        e.sale_version_id.as_deref() == Some(version.id.as_str())
+                            && e.reference.kind
+                                == crate::correction::CorrectionSubjectKind::SaleCount
+                            && e.reference.original_id == item.id
+                    })
+                    .ok_or_else(bad)?;
+                let Some(crate::correction::CorrectionEventValue::SaleCount { input, result }) =
+                    &derived.after
+                else {
+                    return Err(bad());
+                };
+                let old = previous.ok_or_else(bad)?;
+                let count = SaleCount::parse(&version.count).map_err(unavailable)?;
+                if !version_ids.insert(&version.id)
+                    || version_seq > state.sequence
+                    || version.previous_version_id.as_ref() != Some(&old.id)
+                    || sequence(&old.seq)? >= version_seq
+                    || version.confirmation_id != derived.reference.confirmation_id
+                    || version.business_record_id != derived.reference.business_record_id
+                    || version.seq != derived.reference.seq
+                    || version.recorded_at != derived.reference.recorded_at
+                    || count.decimal() != version.count
+                    || count != SaleCount::parse(&input.count).map_err(unavailable)?
+                    || version.amount != result.amount
+                    || version.amount
+                        != calculate_sale_amount(count, selling)
+                            .map_err(unavailable)?
+                            .map(|v| v.decimal())
+                {
+                    return Err(bad());
+                }
+                previous = Some(version);
+                continue;
+            }
             let BusinessPayload::Sale { version: 1, data } = &revision.payload else {
                 return Err(bad());
             };
@@ -1304,7 +1393,12 @@ pub(super) fn validate_sale_schema(connection: &Connection) -> anyhow::Result<()
         [],
         |r| r.get(0),
     )?;
+    let correction = super::correction::snapshot_rows(connection)?;
+    let observations = super::stocktake::snapshot_rows(connection)?;
     validate_snapshot(Validation {
+        correction_event_versions: &correction.event_versions,
+        correction_projections: &correction.projection_versions,
+        observations: &observations.versions,
         records: &rows.records,
         cost_rows: &rows.cost_rows,
         versions: &rows.versions,

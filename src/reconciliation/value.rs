@@ -173,6 +173,14 @@ pub struct ValueActualHead {
     pub value: Money,
     pub holding_version_id: String,
 }
+/// Effective correction plans carry stable logical references until commit,
+/// so amount comparison must not manufacture link or holding version UUIDs.
+#[derive(Debug, Clone)]
+pub struct ValueActualAmounts {
+    pub material: ValueMaterial,
+    pub quantity: Quantity,
+    pub value: Money,
+}
 #[derive(Debug, Clone)]
 pub struct ValueReplayInput {
     pub at_revision: i64,
@@ -574,10 +582,53 @@ pub fn replay_receipt_values(
     history: &ValueReplayInput,
     proposed: &[ValueReplacement],
 ) -> Result<ValueReplayDelta, ValueReplayError> {
-    if history.at_revision < 0 {
+    let mut links = HashSet::new();
+    let mut versions = HashSet::new();
+    for old in &history.effective {
+        identifier(&old.link_id)?;
+        identifier(&old.link_version_id)?;
+        if !links.insert(&old.link_id) || !versions.insert(&old.link_version_id) {
+            return Err(reference());
+        }
+    }
+    for head in &history.actual_heads {
+        identifier(&head.holding_version_id)?;
+    }
+    replay_effective_values(
+        history.at_revision,
+        &history.events,
+        &history
+            .effective
+            .iter()
+            .map(|e| e.value.clone())
+            .collect::<Vec<_>>(),
+        proposed,
+        &history
+            .actual_heads
+            .iter()
+            .map(|h| ValueActualAmounts {
+                material: h.material.clone(),
+                quantity: h.quantity,
+                value: h.value,
+            })
+            .collect::<Vec<_>>(),
+    )
+}
+
+/// Compare a single receipt's additions over a complete effective prefix.
+/// The caller validates plan references; quantities, values and anchors remain
+/// independently checked here. This never applies a quantity correction.
+pub fn replay_effective_values(
+    at_revision: i64,
+    source_events: &[ValueReplayEvent],
+    effective: &[ValueReplacement],
+    proposed: &[ValueReplacement],
+    actual_heads: &[ValueActualAmounts],
+) -> Result<ValueReplayDelta, ValueReplayError> {
+    if at_revision < 0 {
         return Err(invalid());
     }
-    let mut events = history.events.iter().collect::<Vec<_>>();
+    let mut events = source_events.iter().collect::<Vec<_>>();
     events.sort_by(|a, b| {
         a.event()
             .seq
@@ -589,22 +640,15 @@ pub fn replay_receipt_values(
     for source in &events {
         let event = source.event();
         identifier(&event.id)?;
-        if event.seq <= 0 || event.seq > history.at_revision || !event_ids.insert(&event.id) {
+        if event.seq <= 0 || event.seq > at_revision || !event_ids.insert(&event.id) {
             return Err(invalid());
         }
         if let ValueReplayEvent::Observation { material, .. } = source {
             anchors.insert(event.id.as_str(), material.material_id.as_str());
         }
     }
-    let mut links = HashSet::new();
-    let mut versions = HashSet::new();
-    for old in &history.effective {
-        identifier(&old.link_id)?;
-        identifier(&old.link_version_id)?;
-        if !links.insert(&old.link_id) || !versions.insert(&old.link_version_id) {
-            return Err(reference());
-        }
-        validate_replacement(&old.value, &anchors)?;
+    for old in effective {
+        validate_replacement(old, &anchors)?;
     }
     let mut positions = HashSet::new();
     for value in proposed {
@@ -613,21 +657,16 @@ pub fn replay_receipt_values(
             return Err(reference());
         }
     }
-    let old = history
-        .effective
-        .iter()
-        .map(|link| &link.value)
-        .collect::<Vec<_>>();
+    let old = effective.iter().collect::<Vec<_>>();
     let base = run(&events, &old).map_err(|e| {
         ValueReplayError::InvalidHistory(format!("기존 유효 원장을 재생할 수 없습니다: {e}"))
     })?;
-    if base.current.len() != history.actual_heads.len() {
+    if base.current.len() != actual_heads.len() {
         return Err(invalid());
     }
     let mut head_ids = HashSet::new();
-    for head in &history.actual_heads {
+    for head in actual_heads {
         validate_material(&head.material)?;
-        identifier(&head.holding_version_id)?;
         if !head_ids.insert(&head.material.material_id) {
             return Err(invalid());
         }

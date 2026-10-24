@@ -62,6 +62,7 @@ pub(super) struct Validation<'a> {
     pub effects: &'a [EffectRow],
     pub holdings: &'a [holding::HoldingVersion],
     pub observations: &'a [super::stocktake::VersionRow],
+    pub correction_projections: &'a [super::correction::ProjectionVersionRow],
     pub business_records: &'a [business::Record],
     pub revisions: &'a [crate::business::BusinessRevision],
     pub confirmations: &'a [business::ConfirmationRow],
@@ -712,13 +713,15 @@ pub(super) fn validate_snapshot(state: Validation<'_>) -> Result<(), StoreError>
             if actuals.len() != 1 {
                 return Err(bad());
             }
-            let after = actuals[0];
-            let before = after
-                .previous_version_id
-                .as_ref()
-                .map(|id| state.holdings.iter().find(|h| &h.id == id).ok_or_else(bad))
-                .transpose()?;
-            let holding = holding::input_from_history(state.holdings, state.observations, before)?;
+            // Replay the state known immediately before this original production.
+            // A later correction does not rewrite its frozen input/output costs.
+            let holding = holding::input_at(
+                state.holdings,
+                state.observations,
+                state.correction_projections,
+                &effect.material_id,
+                seq - 1,
+            )?;
             contexts.push(ProductionMaterialContext {
                 material_id: effect.material_id.clone(),
                 material_version_id: effect.material_version_id.clone(),
@@ -820,6 +823,7 @@ fn material_existed_before(material: &crate::catalog::MaterialVersion, sequence:
 
 pub(super) fn validate_production_schema(connection: &Connection) -> anyhow::Result<()> {
     let rows = snapshot_rows(connection)?;
+    let corrections = super::correction::snapshot_rows(connection)?;
     let business = business::snapshot_rows(connection)?;
     let holdings = holding::versions(connection, None)?;
     let versions = catalog::versions(connection, None)?;
@@ -844,6 +848,7 @@ pub(super) fn validate_production_schema(connection: &Connection) -> anyhow::Res
         effects: &rows.effects,
         holdings: &holdings,
         observations: &super::stocktake::versions(connection)?,
+        correction_projections: &corrections.projection_versions,
         business_records: &business.records,
         revisions: &business.revisions,
         confirmations: &business.confirmations,

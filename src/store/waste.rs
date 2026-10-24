@@ -273,6 +273,7 @@ pub(super) struct Validation<'a> {
     pub records: &'a [WasteRecord],
     pub holdings: &'a [holding::HoldingVersion],
     pub observations: &'a [stocktake::VersionRow],
+    pub correction_projections: &'a [super::correction::ProjectionVersionRow],
     pub material_versions: &'a [MaterialVersion],
     pub business_records: &'a [business::Record],
     pub revisions: &'a [crate::business::BusinessRevision],
@@ -406,7 +407,13 @@ pub(super) fn validate_snapshot(state: Validation<'_>) -> Result<(), StoreError>
             material_version_id: material.id.clone(),
             material_name: material.name.clone(),
             unit: material.canonical_unit.clone(),
-            holding: holding::input_from_history(state.holdings, state.observations, Some(before))?,
+            holding: holding::input_at(
+                state.holdings,
+                state.observations,
+                state.correction_projections,
+                &material.material_id,
+                seq - 1,
+            )?,
         };
         let WasteCheck::Ready(mut expected) =
             calculate_waste(data, &context).map_err(unavailable)?
@@ -436,6 +443,7 @@ pub(super) fn validate_snapshot(state: Validation<'_>) -> Result<(), StoreError>
 
 pub(super) fn validate_waste_schema(connection: &Connection) -> anyhow::Result<()> {
     let records = snapshot_rows(connection)?;
+    let corrections = super::correction::snapshot_rows(connection)?;
     let holdings = holding::versions(connection, None)?;
     let observations = stocktake::snapshot_rows(connection)?;
     let materials = catalog::versions(connection, None)?;
@@ -459,6 +467,7 @@ pub(super) fn validate_waste_schema(connection: &Connection) -> anyhow::Result<(
         records: &records,
         holdings: &holdings,
         observations: &observations.versions,
+        correction_projections: &corrections.projection_versions,
         material_versions: &materials,
         business_records: &business.records,
         revisions: &business.revisions,

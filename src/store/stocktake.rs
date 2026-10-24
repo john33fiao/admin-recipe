@@ -21,6 +21,9 @@ pub(super) struct ObservationRow {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct VersionRow {
+    pub correction_projection_id: Option<String>,
+    pub logical_seq: Option<String>,
+    pub observed_at: Option<String>,
     pub id: String,
     pub observation_id: String,
     pub previous_version_id: Option<String>,
@@ -38,6 +41,8 @@ pub(super) struct Head {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct ConsumptionVersion {
+    pub correction_projection_id: Option<String>,
+    pub seq: Option<String>,
     pub id: String,
     pub observation_version_id: String,
     pub previous_version_id: Option<String>,
@@ -72,6 +77,8 @@ pub(super) struct SnapshotRows {
     pub consumption_rows: Vec<ConsumptionRow>,
 }
 pub(super) struct Validation<'a> {
+    pub correction_projections: &'a [super::correction::ProjectionVersionRow],
+    pub correction_events: &'a [super::correction::EventVersionRow],
     pub batches: &'a [StocktakeRecord],
     pub observations: &'a [ObservationRow],
     pub versions: &'a [VersionRow],
@@ -99,8 +106,8 @@ fn records(connection: &Connection) -> Result<Vec<StocktakeRecord>, StoreError> 
         .collect::<rusqlite::Result<_>>().map_err(unavailable)
 }
 pub(super) fn versions(connection: &Connection) -> Result<Vec<VersionRow>, StoreError> {
-    let rows = connection.prepare("SELECT v.id,v.observation_id,v.previous_version_id,v.previous_observation_version_id,v.effect_json,v.recorded_at,v.sequence,v.before_holding_version_id,h.id FROM stocktake_versions v JOIN holding_versions h ON h.observation_version_id=v.id ORDER BY v.sequence,v.id").map_err(unavailable)?
-        .query_map([], |r| Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,Option<String>>(2)?,r.get::<_,Option<String>>(3)?,r.get::<_,String>(4)?,r.get::<_,String>(5)?,r.get::<_,i64>(6)?,r.get::<_,Option<String>>(7)?,r.get::<_,String>(8)?))).map_err(unavailable)?
+    let rows = connection.prepare("SELECT v.id,v.observation_id,v.previous_version_id,v.previous_observation_version_id,v.effect_json,v.recorded_at,v.sequence,v.before_holding_version_id,h.id,v.correction_projection_id,v.logical_sequence,v.observed_at FROM stocktake_versions v LEFT JOIN holding_versions h ON h.observation_version_id=v.id ORDER BY v.sequence,v.id").map_err(unavailable)?
+        .query_map([], |r| Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,Option<String>>(2)?,r.get::<_,Option<String>>(3)?,r.get::<_,String>(4)?,r.get::<_,String>(5)?,r.get::<_,i64>(6)?,r.get::<_,Option<String>>(7)?,r.get::<_,Option<String>>(8)?,r.get::<_,Option<String>>(9)?,r.get::<_,Option<i64>>(10)?,r.get::<_,Option<String>>(11)?))).map_err(unavailable)?
         .collect::<rusqlite::Result<Vec<_>>>().map_err(unavailable)?;
     rows.into_iter()
         .map(
@@ -114,6 +121,9 @@ pub(super) fn versions(connection: &Connection) -> Result<Vec<VersionRow>, Store
                 seq,
                 before,
                 after,
+                correction_projection_id,
+                logical_seq,
+                observed_at,
             )| {
                 let mut effect: StocktakeRowEffect =
                     serde_json::from_str(&json).map_err(unavailable)?;
@@ -123,8 +133,17 @@ pub(super) fn versions(connection: &Connection) -> Result<Vec<VersionRow>, Store
                 {
                     return Err(unavailable("관측 보유 참조가 일치하지 않습니다"));
                 }
-                effect.after.source_id = Some(after);
+                if (correction_projection_id.is_some() != logical_seq.is_some())
+                    || (correction_projection_id.is_some() != observed_at.is_some())
+                    || (correction_projection_id.is_none() && after.is_none())
+                {
+                    return Err(unavailable("관측 실제/논리 기준 참조가 다릅니다"));
+                }
+                effect.after.source_id = after;
                 Ok(VersionRow {
+                    correction_projection_id,
+                    logical_seq: logical_seq.map(|v| v.to_string()),
+                    observed_at,
                     id,
                     observation_id,
                     previous_version_id,
@@ -186,8 +205,8 @@ pub(super) fn observation(row: &VersionRow) -> HoldingObservation {
     HoldingObservation {
         id: row.id.clone(),
         quantity: row.effect.measured_quantity.clone(),
-        recorded_at: row.recorded_at.clone(),
-        seq: row.seq.clone(),
+        recorded_at: row.observed_at.as_ref().unwrap_or(&row.recorded_at).clone(),
+        seq: row.logical_seq.as_ref().unwrap_or(&row.seq).clone(),
     }
 }
 pub(super) fn material_name(
@@ -320,6 +339,8 @@ pub(super) fn apply_stocktake(
             .map_err(unavailable)?;
         if let StocktakeCalculation::Settlement { allocation, .. } = &effect.calculation {
             let cv = ConsumptionVersion {
+                correction_projection_id: None,
+                seq: None,
                 id: Uuid::new_v4().to_string(),
                 observation_version_id: version.clone(),
                 previous_version_id: None,
@@ -495,9 +516,18 @@ fn equal<T: Serialize>(left: &T, right: &T) -> Result<bool, StoreError> {
 pub(super) fn validate_snapshot(state: Validation<'_>) -> Result<(), StoreError> {
     use crate::business::{BusinessKind, BusinessPayload, BusinessStatus};
     let bad = || unavailable("실사·관측·정산의 원본과 확정 근거가 일치하지 않습니다");
-    if state.observations.len() != state.versions.len()
-        || state.heads.len() != state.versions.len()
-        || state.consumption_versions.len() != state.consumption_heads.len()
+    let original_versions = state
+        .versions
+        .iter()
+        .filter(|v| v.correction_projection_id.is_none())
+        .count();
+    let original_consumptions = state
+        .consumption_versions
+        .iter()
+        .filter(|v| v.correction_projection_id.is_none())
+        .count();
+    if state.observations.len() != original_versions
+        || state.heads.len() != state.observations.len()
     {
         return Err(bad());
     }
@@ -564,10 +594,11 @@ pub(super) fn validate_snapshot(state: Validation<'_>) -> Result<(), StoreError>
         if data.note != batch.note {
             return Err(bad());
         }
-        let sources = sale::consumption_sources(
+        let sources = sale::consumption_sources_effective(
             state.sales,
             state.sale_cost_rows,
             state.sale_versions,
+            state.correction_events,
             seq - 1,
         )?;
         let mut contexts = vec![];
@@ -600,12 +631,13 @@ pub(super) fn validate_snapshot(state: Validation<'_>) -> Result<(), StoreError>
             if row.material_version_id.as_deref() != Some(&material.id) {
                 return Err(bad());
             }
-            let before = state
-                .holdings
-                .iter()
-                .filter(|h| h.material_id == id && sequence(&h.seq).is_ok_and(|s| s < seq))
-                .max_by_key(|h| sequence(&h.seq).unwrap_or(0));
-            let holding = holding::input_from_history(state.holdings, state.versions, before)?;
+            let holding = holding::input_at(
+                state.holdings,
+                state.versions,
+                state.correction_projections,
+                id,
+                seq - 1,
+            )?;
             let price = state
                 .prices
                 .iter()
@@ -662,7 +694,7 @@ pub(super) fn validate_snapshot(state: Validation<'_>) -> Result<(), StoreError>
             let matching = state
                 .versions
                 .iter()
-                .filter(|v| v.observation_id == original.id)
+                .filter(|v| v.observation_id == original.id && v.correction_projection_id.is_none())
                 .collect::<Vec<_>>();
             if matching.len() != 1 {
                 return Err(bad());
@@ -671,6 +703,8 @@ pub(super) fn validate_snapshot(state: Validation<'_>) -> Result<(), StoreError>
             identifier(&version.id)?;
             if !used_versions.insert(&version.id)
                 || version.previous_version_id.is_some()
+                || version.logical_seq.is_some()
+                || version.observed_at.is_some()
                 || version.previous_observation_version_id.as_deref()
                     != effect.observation_before.as_ref().map(|o| o.id.as_str())
                 || version.seq != batch.seq
@@ -689,31 +723,19 @@ pub(super) fn validate_snapshot(state: Validation<'_>) -> Result<(), StoreError>
             }
             let mut actual = version.effect.clone();
             actual.after.source_id = None;
-            if actual != effect
-                || state
-                    .heads
-                    .iter()
-                    .filter(|h| {
-                        h.observation_id == original.id && h.current_version_id == version.id
-                    })
-                    .count()
-                    != 1
-            {
+            if actual != effect {
                 return Err(bad());
             }
             let consumption = state
                 .consumption_versions
                 .iter()
-                .filter(|c| c.observation_version_id == version.id)
+                .filter(|c| {
+                    c.observation_version_id == version.id && c.correction_projection_id.is_none()
+                })
                 .collect::<Vec<_>>();
             match &effect.calculation {
                 StocktakeCalculation::Initial { .. } => {
-                    if !consumption.is_empty()
-                        || state
-                            .consumption_heads
-                            .iter()
-                            .any(|h| h.observation_id == original.id)
-                    {
+                    if !consumption.is_empty() {
                         return Err(bad());
                     }
                 }
@@ -725,6 +747,7 @@ pub(super) fn validate_snapshot(state: Validation<'_>) -> Result<(), StoreError>
                     identifier(&c.id)?;
                     if !used_consumptions.insert(&c.id)
                         || c.previous_version_id.is_some()
+                        || c.seq.is_some()
                         || c.basis != allocation.basis
                         || c.end_seq != allocation.end_seq
                         || c.as_of_revision != allocation.as_of_revision
@@ -733,14 +756,6 @@ pub(super) fn validate_snapshot(state: Validation<'_>) -> Result<(), StoreError>
                         || c.unallocated_quantity != allocation.unallocated_quantity
                         || c.unallocated_value != allocation.unallocated_value
                         || c.reason != allocation.reason
-                        || state
-                            .consumption_heads
-                            .iter()
-                            .filter(|h| {
-                                h.observation_id == original.id && h.current_version_id == c.id
-                            })
-                            .count()
-                            != 1
                     {
                         return Err(bad());
                     }
@@ -763,9 +778,15 @@ pub(super) fn validate_snapshot(state: Validation<'_>) -> Result<(), StoreError>
                         {
                             return Err(bad());
                         }
-                        // Until correction replay is introduced, any candidate relation freezes the sale count.
+                        // Only the unified correction path can revise an
+                        // allocated sale; legacy count edits remain forbidden.
                         if state.sale_versions.iter().any(|v| {
-                            v.sale_id == expected.sale_id && sequence(&v.seq).is_ok_and(|s| s > seq)
+                            v.sale_id == expected.sale_id
+                                && sequence(&v.seq).is_ok_and(|s| s > seq)
+                                && !state
+                                    .correction_events
+                                    .iter()
+                                    .any(|e| e.sale_version_id.as_deref() == Some(v.id.as_str()))
                         }) {
                             return Err(bad());
                         }
@@ -775,9 +796,18 @@ pub(super) fn validate_snapshot(state: Validation<'_>) -> Result<(), StoreError>
         }
     }
     if used_observations.len() != state.observations.len()
-        || used_versions.len() != state.versions.len()
-        || used_consumptions.len() != state.consumption_versions.len()
-        || used_rows.len() != state.consumption_rows.len()
+        || used_versions.len() != original_versions
+        || used_consumptions.len() != original_consumptions
+        || used_rows.len()
+            != state
+                .consumption_rows
+                .iter()
+                .filter(|r| {
+                    state.consumption_versions.iter().any(|c| {
+                        c.id == r.consumption_version_id && c.correction_projection_id.is_none()
+                    })
+                })
+                .count()
         || state.confirmations.iter().any(|c| {
             state
                 .business_records
@@ -788,11 +818,102 @@ pub(super) fn validate_snapshot(state: Validation<'_>) -> Result<(), StoreError>
     {
         return Err(bad());
     }
+    validate_effective_heads(&state)?;
+    Ok(())
+}
+
+fn validate_effective_heads(state: &Validation<'_>) -> Result<(), StoreError> {
+    use super::correction::Projection;
+    let bad = || unavailable("실사·소모의 현재 head 또는 정정 결과 연결이 다릅니다");
+    let mut observations = HashSet::new();
+    for head in state.heads {
+        let latest = state
+            .versions
+            .iter()
+            .filter(|v| v.observation_id == head.observation_id)
+            .max_by_key(|v| v.seq.parse::<i64>().unwrap_or(-1))
+            .ok_or_else(bad)?;
+        if !observations.insert(&head.observation_id) || head.current_version_id != latest.id {
+            return Err(bad());
+        }
+    }
+    let mut expected_heads = Vec::new();
+    for observation in state.observations {
+        let current = state
+            .correction_projections
+            .iter()
+            .filter(|p| {
+                p.projection.kind() == "allocation" && p.projection.subject_id() == observation.id
+            })
+            .max_by_key(|p| p.seq.parse::<i64>().unwrap_or(-1));
+        if let Some(p) = current {
+            let Projection::Allocation {
+                consumption_version_id,
+                ..
+            } = &p.projection
+            else {
+                unreachable!()
+            };
+            if let Some(id) = consumption_version_id {
+                expected_heads.push((&observation.id, id));
+            }
+        } else if let Some(c) = state.consumption_versions.iter().find(|c| {
+            c.correction_projection_id.is_none()
+                && state
+                    .versions
+                    .iter()
+                    .any(|v| v.id == c.observation_version_id && v.observation_id == observation.id)
+        }) {
+            expected_heads.push((&observation.id, &c.id));
+        }
+    }
+    if expected_heads.len() != state.consumption_heads.len() {
+        return Err(bad());
+    }
+    let mut seen = HashSet::new();
+    for head in state.consumption_heads {
+        if !seen.insert(&head.observation_id)
+            || !expected_heads.contains(&(&head.observation_id, &head.current_version_id))
+        {
+            return Err(bad());
+        }
+    }
+    for v in state
+        .versions
+        .iter()
+        .filter(|v| v.correction_projection_id.is_some())
+    {
+        if !state.correction_projections.iter().any(|p|
+            Some(&p.id) == v.correction_projection_id.as_ref()
+                && matches!(&p.projection, Projection::Observation { observation_version_id:Some(id), .. } if id == &v.id)) {
+            return Err(bad());
+        }
+    }
+    for c in state
+        .consumption_versions
+        .iter()
+        .filter(|c| c.correction_projection_id.is_some())
+    {
+        if !state.correction_projections.iter().any(|p|
+            Some(&p.id) == c.correction_projection_id.as_ref()
+                && matches!(&p.projection, Projection::Allocation { consumption_version_id:Some(id), .. } if id == &c.id)) {
+            return Err(bad());
+        }
+    }
+    if state.consumption_rows.iter().any(|r| {
+        !state
+            .consumption_versions
+            .iter()
+            .any(|c| c.id == r.consumption_version_id)
+    }) {
+        return Err(bad());
+    }
     Ok(())
 }
 
 pub(super) fn validate_stocktake_schema(connection: &Connection) -> anyhow::Result<()> {
     let rows = snapshot_rows(connection)?;
+    let corrections = super::correction::snapshot_rows(connection)?;
     let business = business::snapshot_rows(connection)?;
     let sales = sale::snapshot_rows(connection)?;
     let mutations = connection
@@ -812,6 +933,8 @@ pub(super) fn validate_stocktake_schema(connection: &Connection) -> anyhow::Resu
         |r| r.get(0),
     )?;
     validate_snapshot(Validation {
+        correction_projections: &corrections.projection_versions,
+        correction_events: &corrections.event_versions,
         batches: &rows.batches,
         observations: &rows.observations,
         versions: &rows.versions,

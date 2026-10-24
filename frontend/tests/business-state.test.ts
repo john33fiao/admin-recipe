@@ -50,6 +50,98 @@ function reconciledReceiptPayload() {
   } }
 }
 
+function correctionPayload() {
+  return { kind: 'correction', version: 1, data: {
+    expected_target_version_id: headId, reason: '가상 정정', action: { kind: 'replace', replacement: { kind: 'receipt', data: reconciledReceiptPayload().data } },
+    observation_reviews: [{ observation_id: recordId, expected_version_id: headId, initial_value: { kind: 'manual_amount', amount: '0' }, excess: null }],
+    linked_receipt_changes: [{ receipt_id: requestId, expected_version_id: headId, action: { kind: 'replace', data: reconciledReceiptPayload().data } }],
+  } }
+}
+
+test('correction replacement nested edit marks dirty without changing the saved baseline', () => {
+  const h = harness()
+  const scope = vue.effectScope()
+  try {
+    const seed = { ...initial, corrects: headId, payload: correctionPayload() }
+    const editor = scope.run(() => h.create(recordId, seed, async () => null))!
+    editor.payload.value.data.action.replacement.data.stock_effect.selections[0].included_quantity = '999'
+    assert.equal(editor.dirty.value, true)
+    assert.equal(seed.payload.data.action.replacement.data.stock_effect.selections[0]!.included_quantity, '1000')
+  } finally { scope.stop() }
+})
+
+test('correction review and linked receipt edits invalidate preview and remain dirty', async () => {
+  const h = harness()
+  const scope = vue.effectScope()
+  try {
+    const seed = { ...initial, corrects: headId, payload: correctionPayload() }
+    const editor = scope.run(() => h.create(recordId, seed, async () => null))!
+    const showing = editor.showPreview()
+    h.requests[0]!.resolve({ record_id: recordId, head_id: headId, state: { epoch, revision: '5' }, can_confirm: false, issues: [], effect: { kind: 'correction', correction: { review_requests: [] } } })
+    await showing
+    editor.payload.value.data.observation_reviews[0].initial_value.amount = '20'
+    editor.payload.value.data.linked_receipt_changes[0].action.data.stock_effect.selections.reverse()
+    assert.equal(editor.preview.value, null)
+    assert.equal(editor.dirty.value, true)
+    assert.equal(seed.payload.data.observation_reviews[0]!.initial_value.amount, '0')
+  } finally { scope.stop() }
+})
+
+test('correction uncertain retry after navigation preserves the full sent body and target', async () => {
+  const h = harness()
+  const seed = { ...initial, corrects: headId, payload: correctionPayload() }
+  const firstScope = vue.effectScope()
+  const first = firstScope.run(() => h.create(recordId, seed, async () => null))!
+  const sending = first.send('revise')
+  const original = JSON.stringify(h.requests[0]!.body)
+  first.payload.value.data.action.replacement.data.stock_effect.selections[0].included_quantity = '0'
+  first.payload.value.data.observation_reviews[0].initial_value.amount = '7'
+  first.payload.value.data.linked_receipt_changes.reverse()
+  firstScope.stop()
+  const nextScope = vue.effectScope()
+  try {
+    const next = nextScope.run(() => h.create(recordId, seed, async () => null))!
+    assert.equal(next.locked.value, true)
+    h.requests[0]!.reject(new ApiError(503, 'uncertain', 'unavailable'))
+    await sending
+    const retry = next.send('revise')
+    const retried = JSON.stringify(h.requests[1]!.body)
+    const stored = h.storage.get(`sunchang.business.${recordId}.pending.v1`)
+    h.requests[1]!.resolve({ result: { item: { ...item, kind: 'correction' }, head: { ...head, payload: JSON.parse(original).payload }, issues: [] }, state: { epoch, revision: '6' } })
+    await retry
+    assert.equal(retried, original)
+    assert.equal(JSON.stringify(JSON.parse(stored!).body), original)
+    assert.equal(next.pending.value, null)
+  } finally { nextScope.stop() }
+})
+
+test('correction aliases and 413 review retain target version and raw inputs until explicit edit', async () => {
+  const h = harness()
+  const scope = vue.effectScope()
+  try {
+    const seed = { ...initial, payload: correctionPayload(), corrects: headId, recordId: null, headId: null }
+    const editor = scope.run(() => h.create('new.correction', seed, async () => null))!
+    const sending = editor.send('create')
+    assert.equal(h.requests[0]!.path, '/api/corrections/drafts')
+    const original = JSON.stringify(editor.pending.value)
+    h.requests[0]!.reject(new ApiError(413, '본문 크기를 줄여 주세요', 'validation'))
+    await sending
+    assert.equal(editor.canReview.value, true)
+    assert.equal(editor.canRetry.value, false)
+    assert.equal(JSON.stringify(editor.pending.value), original)
+    const reviewing = editor.review()
+    h.requests[1]!.resolve({ epoch, revision: '42' })
+    await reviewing
+    assert.equal(editor.payload.value.data.expected_target_version_id, headId)
+    assert.equal(editor.payload.value.data.action.replacement.data.stock_effect.selections[0].included_quantity, '1000')
+    assert.equal(editor.pending.value, null)
+    const revised = h.create(recordId, { ...initial, corrects: headId, payload: correctionPayload() }, async () => null)
+    const saving = revised.send('revise')
+    assert.equal(h.requests[2]!.path, `/api/corrections/${recordId}/draft-revisions`)
+    h.requests[2]!.reject(new ApiError(503, 'uncertain', 'unavailable')); await saving
+  } finally { scope.stop() }
+})
+
 test('reconciled receipt nested selection edits mark dirty and invalidate preview', async () => {
   const h = harness()
   const scope = vue.effectScope()

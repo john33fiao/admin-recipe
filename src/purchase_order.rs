@@ -14,6 +14,7 @@ pub enum OrderAction {
     Revise,
     Cancel,
     Receive,
+    Correct,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -196,6 +197,8 @@ pub struct OrderProposal {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct OrderVersion {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub correction_projection_id: Option<String>,
     pub id: String,
     pub order_id: String,
     pub previous_version_id: Option<String>,

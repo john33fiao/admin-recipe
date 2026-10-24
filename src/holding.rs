@@ -13,6 +13,7 @@ pub enum HoldingBasisKind {
     Production,
     Observation,
     Reconciliation,
+    Correction,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -143,6 +144,14 @@ impl From<&UnitPrice> for PriceBasis {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct HoldingCorrection {
+    pub id: String,
+    pub recorded_at: String,
+    pub seq: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct HoldingDetail {
     pub material_id: String,
     pub material_version_id: String,
@@ -154,6 +163,8 @@ pub struct HoldingDetail {
     pub confirmed_changes: Vec<HoldingChange>,
     pub price: ResolvedPrice,
     pub state: CatalogState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub correction: Option<HoldingCorrection>,
 }
 
 /// Already settled quantities in the material's canonical unit. Absence of a
@@ -250,7 +261,8 @@ pub fn validate_holding_input(input: &HoldingInput) -> Result<(), DomainError> {
         (
             HoldingBasisKind::Receipt
             | HoldingBasisKind::Production
-            | HoldingBasisKind::Reconciliation,
+            | HoldingBasisKind::Reconciliation
+            | HoldingBasisKind::Correction,
             None,
         ) => {}
         (HoldingBasisKind::Observation, Some(observation)) => {

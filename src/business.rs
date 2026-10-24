@@ -1,6 +1,7 @@
 pub use crate::purchase_order::DraftOrderActionV1;
 use crate::{
     catalog::{CatalogState, MaterialPriceVersion, MutationMeta},
+    correction::{DraftCorrectionV1, normalize_correction_draft},
     domain::DomainError,
     holding::{HoldingAmounts, HoldingBasisRef, HoldingObservation},
     production::{
@@ -26,6 +27,7 @@ pub enum BusinessKind {
     Sale,
     Stocktake,
     Waste,
+    Correction,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -117,6 +119,11 @@ pub enum BusinessPayload {
         version: u32,
         data: DraftWasteV1,
     },
+    Correction {
+        #[serde(deserialize_with = "payload_version")]
+        version: u32,
+        data: DraftCorrectionV1,
+    },
 }
 
 impl BusinessPayload {
@@ -129,6 +136,7 @@ impl BusinessPayload {
             Self::Sale { .. } => BusinessKind::Sale,
             Self::Stocktake { .. } => BusinessKind::Stocktake,
             Self::Waste { .. } => BusinessKind::Waste,
+            Self::Correction { .. } => BusinessKind::Correction,
         }
     }
     pub fn version(&self) -> u32 {
@@ -139,7 +147,8 @@ impl BusinessPayload {
             | Self::Production { version, .. }
             | Self::Sale { version, .. }
             | Self::Stocktake { version, .. }
-            | Self::Waste { version, .. } => *version,
+            | Self::Waste { version, .. }
+            | Self::Correction { version, .. } => *version,
         }
     }
 }
@@ -171,6 +180,7 @@ pub fn normalize_business_payload(
         BusinessPayload::Sale { data, .. } => normalize_sale_draft(data)?,
         BusinessPayload::Stocktake { data, .. } => normalize_stocktake_draft(data)?,
         BusinessPayload::Waste { data, .. } => normalize_waste_draft(data)?,
+        BusinessPayload::Correction { data, .. } => normalize_correction_draft(data)?,
     }
     Ok(payload)
 }
@@ -274,6 +284,11 @@ pub struct BusinessRevision {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum BusinessResult {
+    Correction {
+        correction_id: String,
+        original_id: String,
+        target_confirmation_id: String,
+    },
     ReconciledReceipt {
         receipt_id: String,
         reconciliation_id: String,
@@ -382,6 +397,9 @@ pub struct BusinessMutation {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum BusinessEffect {
+    Correction {
+        correction: Box<crate::correction::CorrectionPlan>,
+    },
     ReconciledReceipt {
         receipt: Box<crate::reconciliation::ReconciledReceiptEffect>,
     },

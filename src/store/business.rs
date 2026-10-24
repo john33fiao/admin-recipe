@@ -1,6 +1,6 @@
 use super::{
-    Store, StoreError, catalog, production, purchase_order, receipt, sale, snapshot, stocktake,
-    unavailable, waste,
+    Store, StoreError, catalog, correction, production, purchase_order, receipt, sale, snapshot,
+    stocktake, unavailable, waste,
 };
 use crate::{
     business::*,
@@ -25,6 +25,7 @@ fn parse_kind(kind: &str) -> Result<BusinessKind, StoreError> {
         "sale" => Ok(BusinessKind::Sale),
         "stocktake" => Ok(BusinessKind::Stocktake),
         "waste" => Ok(BusinessKind::Waste),
+        "correction" => Ok(BusinessKind::Correction),
         _ => Err(unavailable("지원하지 않는 업무 종류입니다")),
     }
 }
@@ -37,6 +38,7 @@ fn kind_text(kind: BusinessKind) -> &'static str {
         BusinessKind::Sale => "sale",
         BusinessKind::Stocktake => "stocktake",
         BusinessKind::Waste => "waste",
+        BusinessKind::Correction => "correction",
     }
 }
 fn result_material_id(result: &BusinessResult) -> Option<&str> {
@@ -48,7 +50,8 @@ fn result_material_id(result: &BusinessResult) -> Option<&str> {
         BusinessResult::Production { .. }
         | BusinessResult::Sale { .. }
         | BusinessResult::Stocktake { .. }
-        | BusinessResult::Waste { .. } => None,
+        | BusinessResult::Waste { .. }
+        | BusinessResult::Correction { .. } => None,
     }
 }
 fn same_correction_target(left: &BusinessResult, right: &BusinessResult) -> bool {
@@ -220,7 +223,7 @@ fn confirmation_rows(connection: &Connection) -> Result<Vec<ConfirmationRow>, St
         .query_map([],|r|Ok(ConfirmationRow{id:r.get(0)?,record_id:r.get(1)?,revision_id:r.get(2)?,request_id:r.get(3)?,recorded_at:r.get(4)?,seq:r.get::<_,i64>(5)?.to_string()})).map_err(unavailable)?
         .collect::<rusqlite::Result<_>>().map_err(unavailable)
 }
-fn confirmation(
+pub(super) fn confirmation(
     connection: &Connection,
     id: &str,
 ) -> Result<Option<BusinessConfirmation>, StoreError> {
@@ -239,6 +242,7 @@ fn confirmation(
         BusinessKind::Sale => sale::result(connection,id)?,
         BusinessKind::Stocktake=>stocktake::result(connection,id)?,
         BusinessKind::Waste=>waste::result(connection,id)?,
+        BusinessKind::Correction=>correction::result(connection,id)?,
     };
     Ok(Some(BusinessConfirmation {
         id: row.id,
@@ -342,6 +346,12 @@ fn inspect(
         }
         BusinessPayload::Stocktake { data, .. } => stocktake::inspect_stocktake(connection, data),
         BusinessPayload::Waste { data, .. } => waste::inspect_waste(connection, data),
+        BusinessPayload::Correction { data, .. } => correction::inspect_correction(
+            connection,
+            data,
+            record.corrects_confirmation_id.as_deref(),
+            today,
+        ),
     }
 }
 fn inspect_price(
@@ -537,6 +547,9 @@ fn detail(
         BusinessPayload::Sale { data, .. } => sale::material_name(connection, data)?,
         BusinessPayload::Stocktake { data, .. } => stocktake::material_name(connection, data)?,
         BusinessPayload::Waste { data, .. } => waste::material_name(connection, data)?,
+        BusinessPayload::Correction { data, .. } => {
+            correction::material_name(connection, data, record.corrects_confirmation_id.as_deref())?
+        }
     };
     let item = BusinessSummary {
         id: record.id,
@@ -607,6 +620,9 @@ fn check_target(
     target: Option<&str>,
     payload: &BusinessPayload,
 ) -> Result<(), StoreError> {
+    if let BusinessPayload::Correction { data, .. } = payload {
+        return correction::check_target(connection, target, data);
+    }
     if let Some(target) = target {
         if let BusinessPayload::Sale { data, .. } = payload {
             return sale::check_correction(connection, target, data);
@@ -816,8 +832,10 @@ impl Store {
                     BusinessPayload::Sale {data,..} => sale::apply_sale(tx,data,record.corrects_confirmation_id.as_deref(),&event)?,
                     BusinessPayload::Stocktake{data,..}=>stocktake::apply_stocktake(tx,data,&event,seq,time)?,
                     BusinessPayload::Waste{data,..}=>waste::apply_waste(tx,data,&event,seq,time)?,
+                    BusinessPayload::Correction{data,..}=>correction::apply_correction(tx,data,record.corrects_confirmation_id.as_deref().ok_or_else(||validation("정정 대상 원확정을 선택하세요"))?,&ConfirmationRow{id:event.clone(),record_id:id.clone(),revision_id:revision.clone(),request_id:input.meta.request_id.clone(),recorded_at:time.into(),seq:seq.to_string()},seq,time,today)?,
                 }
-                if let Some(target) = record.corrects_confirmation_id {
+                if let Some(target) = record.corrects_confirmation_id
+                    && !matches!(head.payload,BusinessPayload::Correction{..}) {
                     tx.execute(
                         "INSERT INTO business_corrections(target_confirmation_id,replacement_confirmation_id) VALUES(?1,?2)",
                         params![target, event],

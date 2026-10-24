@@ -743,15 +743,16 @@ pub(super) fn validate_receipt_links(
         || closures.len()
             != orders
                 .iter()
-                .filter(|o| o.status == OrderStatus::Received)
+                .filter(|o| {
+                    o.status == OrderStatus::Received && o.correction_projection_id.is_none()
+                })
                 .count()
     {
         return Err(bad());
     }
-    let mut seen_orders = std::collections::HashSet::new();
     let mut seen_receipts = std::collections::HashSet::new();
     for row in closures {
-        if !seen_orders.insert(&row.order_id) || !seen_receipts.insert(&row.receipt_id) {
+        if !seen_receipts.insert(&row.receipt_id) {
             return Err(bad());
         }
         let receipt = receipts
@@ -884,8 +885,8 @@ fn validate_legacy_holdings(
             .iter()
             .find(|h| h.material_id == material)
             .ok_or_else(bad)?;
-        if Some(head.current_version_id.as_str()) != previous
-            || head.last_valid_version_id.as_deref() != Some(head.current_version_id.as_str())
+        if head.current_version_id.as_deref() != previous
+            || head.last_valid_version_id.as_deref() != head.current_version_id.as_deref()
         {
             return Err(bad());
         }

@@ -561,7 +561,7 @@ fn frozen_schema_four_preserves_price_request_canonical_strings_and_immutable_fi
         &fs::read(root.path().join(format!("snapshots/{seq:020}.json"))).unwrap(),
     )
     .unwrap();
-    assert_eq!(newest["schema_version"], 11);
+    assert_eq!(newest["schema_version"], 12);
     assert_eq!(
         newest["state"]["purchase_orders"].as_array().unwrap().len(),
         1

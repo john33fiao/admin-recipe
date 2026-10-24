@@ -26,8 +26,8 @@ T-002는 계산·데이터 계약, T-020은 공통 UI 기반으로 서로 독립
 | [T-008: 실측 손질·비축 생산과 원가 이월](T-008-production.md) | 1차 · 완료 — 실측 생산·원가 배분·보유 이력 검증 | [T-004](T-004-recipes-and-costs.md), [T-007](T-007-receipts.md) |
 | [T-009: 판매 수량·금액과 실사 소모 연결](T-009-sales-consumption.md) | 1차 · 완료 | [T-004](T-004-recipes-and-costs.md), [T-008](T-008-production.md) |
 | [T-010: 명시 폐기·선택 실사와 판매 소모 배분](T-010-stocktake-and-waste.md) | 1차 · 실사·폐기 구현·검증 완료 · 02 반품 T-013 대기 | [T-008](T-008-production.md), [T-009](T-009-sales-consumption.md) |
-| [T-011: 실사에 포함된 지연 입고 보정](T-011-late-receipt-reconciliation.md) | 1차 · 완료 — 실제 정정 writer 연결은 T-012 | [T-007](T-007-receipts.md), [T-010](T-010-stocktake-and-waste.md) |
-| [T-012: 업무 오입력 정정과 버전·아카이브 이력](T-012-corrections-and-versions.md) | 1차 · 대기 | [T-009](T-009-sales-consumption.md), [T-010](T-010-stocktake-and-waste.md), [T-011](T-011-late-receipt-reconciliation.md) |
+| [T-011: 실사에 포함된 지연 입고 보정](T-011-late-receipt-reconciliation.md) | 1차 · 완료 — 실제 정정 writer도 T-012에서 검증 | [T-007](T-007-receipts.md), [T-010](T-010-stocktake-and-waste.md) |
+| [T-012: 업무 오입력 정정과 버전·아카이브 이력](T-012-corrections-and-versions.md) | 1차 · 완료 — 원기록 보존 정정·취소와 영향/이력 검증 | [T-009](T-009-sales-consumption.md), [T-010](T-010-stocktake-and-waste.md), [T-011](T-011-late-receipt-reconciliation.md) |
 | [T-013: 구매 취소·반품과 현재 재고 가치](T-013-purchase-returns.md) | 1차 · 대기 | [T-007](T-007-receipts.md), [T-012](T-012-corrections-and-versions.md) |
 | [T-014: 판매·생산·폐기·실사를 모아 입력하는 작업 화면](T-014-closing-workspace.md) | 1차 · 대기 | [T-012](T-012-corrections-and-versions.md), [T-013](T-013-purchase-returns.md), [T-020](T-020-ui-foundation.md) |
 | [T-015: 사진·대표 사진·설명과 구입처](T-015-photos-and-suppliers.md) | 1차 · 대기 | [T-004](T-004-recipes-and-costs.md), [T-005](T-005-business-history.md) |

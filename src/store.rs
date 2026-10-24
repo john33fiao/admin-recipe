@@ -13,6 +13,7 @@ use uuid::Uuid;
 
 mod business;
 mod catalog;
+mod correction;
 mod holding;
 mod mutation;
 mod production;
@@ -26,7 +27,7 @@ mod snapshot;
 mod stocktake;
 mod waste;
 
-const SCHEMA_VERSION: i64 = 11;
+const SCHEMA_VERSION: i64 = 12;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Material {
@@ -181,6 +182,7 @@ impl Store {
     /// published records whose files were lost during a database-only move.
     pub fn recover(&mut self) -> Result<(), StoreError> {
         reconciliation::validate_physical_columns(&self.connection)?;
+        correction::validate_physical_columns(&self.connection)?;
         // Hold only record keys in memory; retained full-state payloads may be
         // much larger than the current material list.
         let entries: Vec<(i64, bool)> = self
@@ -322,6 +324,7 @@ fn validate_schema(connection: &Connection) -> anyhow::Result<()> {
     stocktake::validate_stocktake_schema(connection)?;
     waste::validate_waste_schema(connection)?;
     reconciliation::validate_reconciliation_schema(connection)?;
+    correction::validate_correction_schema(connection)?;
     let violation: Option<String> = connection
         .query_row("PRAGMA foreign_key_check", [], |row| row.get(0))
         .optional()?;
@@ -416,6 +419,9 @@ fn migrate(connection: &mut Connection, starting_version: i64) -> anyhow::Result
     }
     if version < 11 {
         schema::migrate_reconciliation(&transaction)?;
+    }
+    if version < 12 {
+        schema::migrate_corrections(&transaction)?;
     }
     validate_schema(&transaction)?;
     transaction.commit()?;

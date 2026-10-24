@@ -29,6 +29,7 @@ pub(super) fn action_text(action: OrderAction) -> &'static str {
         OrderAction::Revise => "revise",
         OrderAction::Cancel => "cancel",
         OrderAction::Receive => "receive",
+        OrderAction::Correct => "correct",
     }
 }
 fn status_text(status: OrderStatus) -> &'static str {
@@ -44,6 +45,7 @@ fn parse_action(value: &str) -> Result<OrderAction, StoreError> {
         "revise" => Ok(OrderAction::Revise),
         "cancel" => Ok(OrderAction::Cancel),
         "receive" => Ok(OrderAction::Receive),
+        "correct" => Ok(OrderAction::Correct),
         _ => Err(unavailable("지원하지 않는 주문 동작입니다")),
     }
 }
@@ -78,7 +80,7 @@ pub(super) struct OrderSnapshotRows {
     pub heads: Vec<OrderHead>,
 }
 
-const VERSION_COLUMNS: &str = "v.id,v.order_id,v.previous_version_id,v.confirmation_id,c.record_id,v.action,v.status,v.material_id,v.material_version_id,m.name,v.quantity_micros,v.unit,v.input_quantity,v.input_unit,v.supplier,v.expected_date,v.estimated_amount_micros,v.note,v.recorded_at,v.sequence";
+const VERSION_COLUMNS: &str = "v.id,v.order_id,v.previous_version_id,v.confirmation_id,c.record_id,v.action,v.status,v.material_id, v.material_version_id,m.name,v.quantity_micros,v.unit,v.input_quantity,v.input_unit,v.supplier,v.expected_date,v.estimated_amount_micros,v.note,v.recorded_at,v.sequence,v.correction_projection_id";
 const VERSION_JOINS: &str = "FROM purchase_order_versions v JOIN business_confirmations c ON c.id=v.confirmation_id JOIN material_versions m ON m.id=v.material_version_id AND m.material_id=v.material_id";
 
 pub(super) fn read_versions(
@@ -115,6 +117,7 @@ pub(super) fn read_versions(
                 r.get::<_, String>(17)?,
                 r.get::<_, String>(18)?,
                 r.get::<_, i64>(19)?,
+                r.get::<_, Option<String>>(20)?,
             ))
         })
         .map_err(unavailable)?
@@ -143,8 +146,10 @@ pub(super) fn read_versions(
                 note,
                 recorded_at,
                 seq,
+                correction_projection_id,
             )| {
                 let version = OrderVersion {
+                    correction_projection_id,
                     id,
                     order_id,
                     previous_version_id,
@@ -201,9 +206,18 @@ pub(super) fn validate_stored_version(version: &OrderVersion) -> Result<(), Stor
             | (OrderAction::Revise, OrderStatus::Open)
             | (OrderAction::Cancel, OrderStatus::Cancelled)
             | (OrderAction::Receive, OrderStatus::Received)
+            | (
+                OrderAction::Correct,
+                OrderStatus::Open | OrderStatus::Received
+            )
     ) {
         return Err(unavailable(
             "주문 동작과 상태가 일치하지 않거나 입고 연결이 없습니다",
+        ));
+    }
+    if (version.action == OrderAction::Correct) != version.correction_projection_id.is_some() {
+        return Err(unavailable(
+            "주문 정정 동작과 실제 결과 참조가 일치하지 않습니다",
         ));
     }
     let q = Quantity::parse(&version.quantity).map_err(unavailable)?;
@@ -710,7 +724,7 @@ pub(super) fn validate_order_schema(connection: &Connection) -> anyhow::Result<(
         for pair in versions.windows(2) {
             if pair[1].previous_version_id.as_deref() != Some(pair[0].id.as_str())
                 || pair[1].material_id != first.material_id
-                || pair[0].status != OrderStatus::Open
+                || (pair[0].status != OrderStatus::Open && pair[1].action != OrderAction::Correct)
             {
                 anyhow::bail!("주문 버전 연결이 올바르지 않습니다")
             }

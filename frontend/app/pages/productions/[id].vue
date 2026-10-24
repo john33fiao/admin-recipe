@@ -28,5 +28,6 @@ useHead({ title: computed(() => `${detail.value?.item.outputs[0]?.material_name 
   <template v-if="detail"><div class="page-heading"><div><h1>{{ detail.item.outputs[0]?.material_name ?? '생산 기록' }}</h1><p>실제 생산 · 확정</p></div><span class="status-label">생산 확정</span></div>
     <section class="business-record-summary production-detail" aria-labelledby="production-detail-title"><h2 id="production-detail-title">확정한 실제 생산</h2><ProductionResult :inputs="detail.item.inputs" :outputs="detail.item.outputs" :materials="detail.materials" :total="detail.item.total_input_value"/><dl><div><dt>생산 메모</dt><dd class="preserve-lines">{{ detail.item.note || '없음' }}</dd></div><div><dt>기록 시각</dt><dd>{{ formatCreatedAt(detail.item.recorded_at) }} · 기록 {{ detail.item.seq }}</dd></div><div><dt>생산 ID</dt><dd class="material-id">{{ detail.item.id }}</dd></div></dl></section>
     <NuxtLink class="secondary-link" :to="`/business/${detail.item.business_record_id}`">생산 업무 기록 보기</NuxtLink>
+    <CorrectionHistoryPanel :confirmation-id="detail.item.confirmation_id"/>
   </template>
 </template>

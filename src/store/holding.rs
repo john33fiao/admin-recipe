@@ -26,6 +26,10 @@ pub(super) struct LegacyHoldingVersion {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct HoldingVersion {
+    pub correction_projection_id: Option<String>,
+    pub baseline_correction_projection_id: Option<String>,
+    pub last_valid_correction_price_id: Option<String>,
+    pub correction_last_valid_price: Option<PriceBasis>,
     pub reconciliation_effect_id: Option<String>,
     pub baseline_reconciliation_effect_id: Option<String>,
     pub id: String,
@@ -49,8 +53,10 @@ pub(super) struct HoldingVersion {
 #[serde(deny_unknown_fields)]
 pub(super) struct HoldingHead {
     pub material_id: String,
-    pub current_version_id: String,
+    pub current_version_id: Option<String>,
     pub last_valid_version_id: Option<String>,
+    pub unknown_correction_projection_id: Option<String>,
+    pub last_valid_correction_price_id: Option<String>,
 }
 
 pub(super) fn versions(
@@ -65,8 +71,8 @@ fn read_versions(
     material: Option<&str>,
     id: Option<&str>,
 ) -> Result<Vec<HoldingVersion>, StoreError> {
-    let rows=connection.prepare("SELECT id,material_id,material_version_id,previous_version_id,receipt_id,baseline_receipt_id,baseline_sequence,quantity_micros,value_micros,recorded_at,sequence,production_effect_id,baseline_production_effect_id,observation_version_id,baseline_observation_version_id,waste_id,reconciliation_effect_id,baseline_reconciliation_effect_id FROM holding_versions WHERE (?1 IS NULL OR material_id=?1) AND (?2 IS NULL OR id=?2) ORDER BY sequence,id").map_err(unavailable)?
-        .query_map(params![material,id], |r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,Option<String>>(3)?,r.get::<_,Option<String>>(4)?,r.get::<_,Option<String>>(5)?,r.get::<_,i64>(6)?,r.get::<_,i64>(7)?,r.get::<_,i64>(8)?,r.get::<_,String>(9)?,r.get::<_,i64>(10)?,r.get::<_,Option<String>>(11)?,r.get::<_,Option<String>>(12)?,r.get::<_,Option<String>>(13)?,r.get::<_,Option<String>>(14)?,r.get::<_,Option<String>>(15)?,r.get::<_,Option<String>>(16)?,r.get::<_,Option<String>>(17)?)))
+    let rows=connection.prepare("SELECT id,material_id,material_version_id,previous_version_id,receipt_id,baseline_receipt_id,baseline_sequence,quantity_micros,value_micros,recorded_at,sequence,production_effect_id,baseline_production_effect_id,observation_version_id,baseline_observation_version_id,waste_id,reconciliation_effect_id,baseline_reconciliation_effect_id,correction_projection_id,baseline_correction_projection_id,last_valid_correction_price_id FROM holding_versions WHERE (?1 IS NULL OR material_id=?1) AND (?2 IS NULL OR id=?2) ORDER BY sequence,id").map_err(unavailable)?
+        .query_map(params![material,id], |r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,Option<String>>(3)?,r.get::<_,Option<String>>(4)?,r.get::<_,Option<String>>(5)?,r.get::<_,i64>(6)?,r.get::<_,i64>(7)?,r.get::<_,i64>(8)?,r.get::<_,String>(9)?,r.get::<_,i64>(10)?,r.get::<_,Option<String>>(11)?,r.get::<_,Option<String>>(12)?,r.get::<_,Option<String>>(13)?,r.get::<_,Option<String>>(14)?,r.get::<_,Option<String>>(15)?,r.get::<_,Option<String>>(16)?,r.get::<_,Option<String>>(17)?,r.get::<_,Option<String>>(18)?,r.get::<_,Option<String>>(19)?,r.get::<_,Option<String>>(20)?)))
         .map_err(unavailable)?.collect::<rusqlite::Result<Vec<_>>>().map_err(unavailable)?;
     rows.into_iter()
         .map(
@@ -89,8 +95,22 @@ fn read_versions(
                 waste_id,
                 reconciliation_effect_id,
                 baseline_reconciliation_effect_id,
+                correction_projection_id,
+                baseline_correction_projection_id,
+                last_valid_correction_price_id,
             )| {
+                let correction_last_valid_price = last_valid_correction_price_id
+                    .as_deref()
+                    .map(|price| {
+                        super::correction::price_basis(connection, &material_id, price)
+                            .map(|p| PriceBasis::from(&p))
+                    })
+                    .transpose()?;
                 Ok(HoldingVersion {
+                    correction_projection_id,
+                    baseline_correction_projection_id,
+                    last_valid_correction_price_id,
+                    correction_last_valid_price,
                     id,
                     material_id,
                     material_version_id,
@@ -115,8 +135,8 @@ fn read_versions(
         .collect()
 }
 pub(super) fn heads(connection: &Connection) -> Result<Vec<HoldingHead>, StoreError> {
-    connection.prepare("SELECT material_id,current_version_id,last_valid_version_id FROM holding_heads ORDER BY material_id").map_err(unavailable)?
-        .query_map([],|r|Ok(HoldingHead{material_id:r.get(0)?,current_version_id:r.get(1)?,last_valid_version_id:r.get(2)?})).map_err(unavailable)?
+    connection.prepare("SELECT material_id,current_version_id,last_valid_version_id,unknown_correction_projection_id,last_valid_correction_price_id FROM holding_heads ORDER BY material_id").map_err(unavailable)?
+        .query_map([],|r|Ok(HoldingHead{material_id:r.get(0)?,current_version_id:r.get(1)?,last_valid_version_id:r.get(2)?,unknown_correction_projection_id:r.get(3)?,last_valid_correction_price_id:r.get(4)?})).map_err(unavailable)?
         .collect::<rusqlite::Result<_>>().map_err(unavailable)
 }
 
@@ -124,8 +144,14 @@ pub(super) fn current_input(
     connection: &Connection,
     material_id: &str,
 ) -> Result<HoldingInput, StoreError> {
-    let row=connection.query_row("SELECT current_version_id,last_valid_version_id FROM holding_heads WHERE material_id=?1",[material_id],|r|Ok((r.get::<_,String>(0)?,r.get::<_,Option<String>>(1)?))).optional().map_err(unavailable)?;
-    let Some((id, last)) = row else {
+    let row=connection.query_row("SELECT current_version_id,last_valid_version_id,last_valid_correction_price_id,unknown_correction_projection_id FROM holding_heads WHERE material_id=?1",[material_id],|r|Ok((r.get::<_,Option<String>>(0)?,r.get::<_,Option<String>>(1)?,r.get::<_,Option<String>>(2)?,r.get::<_,Option<String>>(3)?))).optional().map_err(unavailable)?;
+    let Some((id, last, correction_price, unknown)) = row else {
+        return Ok(HoldingInput::default());
+    };
+    let Some(id) = id else {
+        if unknown.is_none() || last.is_some() || correction_price.is_some() {
+            return Err(unavailable("미확인 보유의 정정 근거가 올바르지 않습니다"));
+        }
         return Ok(HoldingInput::default());
     };
     let version = read_versions(connection, Some(material_id), Some(&id))?
@@ -155,8 +181,14 @@ pub(super) fn current_input(
         quantity: Some(Quantity::parse(&version.quantity).map_err(unavailable)?),
         value: Some(Money::parse(&version.value).map_err(unavailable)?),
         source_id: Some(id),
-        last_valid: last
-            .map(|last| {
+        last_valid: if let Some(price) = correction_price {
+            Some(super::correction::price_basis(
+                connection,
+                material_id,
+                &price,
+            )?)
+        } else {
+            last.map(|last| {
                 UnitPrice::new(
                     Money::parse(&last.value).map_err(unavailable)?,
                     Quantity::parse(&last.quantity).map_err(unavailable)?,
@@ -164,7 +196,8 @@ pub(super) fn current_input(
                 )
                 .map_err(unavailable)
             })
-            .transpose()?,
+            .transpose()?
+        },
     };
     validate_holding_input(&input).map_err(unavailable)?;
     Ok(input)
@@ -176,11 +209,13 @@ pub(super) fn basis(version: &HoldingVersion) -> Result<HoldingBasisRef, StoreEr
         &version.baseline_production_effect_id,
         &version.baseline_observation_version_id,
         &version.baseline_reconciliation_effect_id,
+        &version.baseline_correction_projection_id,
     ) {
-        (Some(id), None, None, None) => (HoldingBasisKind::Receipt, id),
-        (None, Some(id), None, None) => (HoldingBasisKind::Production, id),
-        (None, None, Some(id), None) => (HoldingBasisKind::Observation, id),
-        (None, None, None, Some(id)) => (HoldingBasisKind::Reconciliation, id),
+        (Some(id), None, None, None, None) => (HoldingBasisKind::Receipt, id),
+        (None, Some(id), None, None, None) => (HoldingBasisKind::Production, id),
+        (None, None, Some(id), None, None) => (HoldingBasisKind::Observation, id),
+        (None, None, None, Some(id), None) => (HoldingBasisKind::Reconciliation, id),
+        (None, None, None, None, Some(id)) => (HoldingBasisKind::Correction, id),
         _ => return Err(unavailable("보유 시작 기준의 원천이 올바르지 않습니다")),
     };
     Ok(HoldingBasisRef {
@@ -231,8 +266,33 @@ pub(super) fn input_from_history(
         quantity: Some(Quantity::parse(&version.quantity).map_err(unavailable)?),
         value: Some(Money::parse(&version.value).map_err(unavailable)?),
         source_id: Some(version.id.clone()),
-        last_valid: last
-            .map(|v| {
+        last_valid: if Quantity::parse(&version.quantity)
+            .map_err(unavailable)?
+            .micros()
+            > 0
+        {
+            Some(
+                UnitPrice::new(
+                    Money::parse(&version.value).map_err(unavailable)?,
+                    Quantity::parse(&version.quantity).map_err(unavailable)?,
+                    version.id.clone(),
+                )
+                .map_err(unavailable)?,
+            )
+        } else if let Some(price) = &version.correction_last_valid_price {
+            if version.last_valid_correction_price_id.as_ref() != Some(&price.source_id) {
+                return Err(unavailable("정정 마지막 단가의 근거가 다릅니다"));
+            }
+            Some(
+                UnitPrice::new(
+                    Money::parse(&price.amount).map_err(unavailable)?,
+                    Quantity::parse(&price.quantity).map_err(unavailable)?,
+                    price.source_id.clone(),
+                )
+                .map_err(unavailable)?,
+            )
+        } else {
+            last.map(|v| {
                 UnitPrice::new(
                     Money::parse(&v.value)?,
                     Quantity::parse(&v.quantity)?,
@@ -240,10 +300,41 @@ pub(super) fn input_from_history(
                 )
             })
             .transpose()
-            .map_err(unavailable)?,
+            .map_err(unavailable)?
+        },
     };
     validate_holding_input(&input).map_err(unavailable)?;
     Ok(input)
+}
+
+/// Effective as-of state. A tombstone is an unknown baseline, never an old
+/// positive holding resurrected by a maximum-sequence lookup.
+pub(super) fn input_at(
+    versions: &[HoldingVersion],
+    observations: &[stocktake::VersionRow],
+    projections: &[super::correction::ProjectionVersionRow],
+    material: &str,
+    at: i64,
+) -> Result<HoldingInput, StoreError> {
+    let latest = versions
+        .iter()
+        .filter(|h| h.material_id == material && h.seq.parse::<i64>().is_ok_and(|n| n <= at))
+        .max_by_key(|h| h.seq.parse::<i64>().unwrap_or(-1));
+    let correction=projections.iter().filter(|p|matches!(&p.projection,super::correction::Projection::Material{change,..} if change.material_id==material)&&p.seq.parse::<i64>().is_ok_and(|n|n<=at)).max_by_key(|p|p.seq.parse::<i64>().unwrap_or(-1));
+    if let Some(p) = correction {
+        if latest
+            .is_none_or(|h| h.seq.parse::<i64>().unwrap_or(-1) < p.seq.parse::<i64>().unwrap_or(-1))
+        {
+            return Ok(HoldingInput::default());
+        }
+        let history = versions
+            .iter()
+            .filter(|h| h.seq.parse::<i64>().unwrap_or(-1) >= p.seq.parse::<i64>().unwrap_or(-1))
+            .cloned()
+            .collect::<Vec<_>>();
+        return input_from_history(&history, observations, latest);
+    }
+    input_from_history(versions, observations, latest)
 }
 
 pub(super) fn effect_holdings(
@@ -360,9 +451,10 @@ pub(super) fn append(
         baseline_production,
         baseline_observation,
         baseline_reconciliation,
+        baseline_correction,
         boundary,
     ) = if let Some(observation) = observation_version_id {
-        (None, None, Some(observation), None, seq)
+        (None, None, Some(observation), None, None, seq)
     } else {
         match before.basis.as_ref() {
             Some(b) => {
@@ -376,10 +468,19 @@ pub(super) fn append(
                     .parse::<i64>()
                     .map_err(unavailable)?;
                 match b.kind {
-                    HoldingBasisKind::Receipt => (Some(source), None, None, None, boundary),
-                    HoldingBasisKind::Production => (None, Some(source), None, None, boundary),
-                    HoldingBasisKind::Observation => (None, None, Some(source), None, boundary),
-                    HoldingBasisKind::Reconciliation => (None, None, None, Some(source), boundary),
+                    HoldingBasisKind::Receipt => (Some(source), None, None, None, None, boundary),
+                    HoldingBasisKind::Production => {
+                        (None, Some(source), None, None, None, boundary)
+                    }
+                    HoldingBasisKind::Observation => {
+                        (None, None, Some(source), None, None, boundary)
+                    }
+                    HoldingBasisKind::Reconciliation => {
+                        (None, None, None, Some(source), None, boundary)
+                    }
+                    HoldingBasisKind::Correction => {
+                        (None, None, None, None, Some(source), boundary)
+                    }
                 }
             }
             None => (
@@ -387,6 +488,7 @@ pub(super) fn append(
                 production_effect_id,
                 None,
                 reconciliation_effect_id,
+                None,
                 seq,
             ),
         }
@@ -411,8 +513,11 @@ pub(super) fn append(
     } else {
         before.last_valid.as_ref().map(UnitPrice::source_id)
     };
-    connection.execute("INSERT INTO holding_versions(id,material_id,material_version_id,previous_version_id,receipt_id,baseline_receipt_id,baseline_sequence,quantity_micros,value_micros,recorded_at,sequence,production_effect_id,baseline_production_effect_id,observation_version_id,baseline_observation_version_id,waste_id,reconciliation_effect_id,baseline_reconciliation_effect_id) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18)",params![id,material_id,material_version_id,before.source_id,receipt_id,baseline_receipt,boundary,q.micros(),v.micros(),time,seq,production_effect_id,baseline_production,observation_version_id,baseline_observation,waste_id,reconciliation_effect_id,baseline_reconciliation]).map_err(unavailable)?;
-    connection.execute("INSERT INTO holding_heads(material_id,current_version_id,last_valid_version_id) VALUES(?1,?2,?3) ON CONFLICT(material_id) DO UPDATE SET current_version_id=excluded.current_version_id,last_valid_version_id=excluded.last_valid_version_id",params![material_id,id,last]).map_err(unavailable)?;
+    let last_is_correction=last.map(|last|connection.query_row("SELECT EXISTS(SELECT 1 FROM correction_price_bases WHERE id=?1 AND material_id=?2)",params![last,material_id],|r|r.get::<_,bool>(0)).map_err(unavailable)).transpose()?.unwrap_or(false);
+    let last_price = if last_is_correction { last } else { None };
+    let last_holding = if last_is_correction { None } else { last };
+    connection.execute("INSERT INTO holding_versions(id,material_id,material_version_id,previous_version_id,receipt_id,baseline_receipt_id,baseline_sequence,quantity_micros,value_micros,recorded_at,sequence,production_effect_id,baseline_production_effect_id,observation_version_id,baseline_observation_version_id,waste_id,reconciliation_effect_id,baseline_reconciliation_effect_id,baseline_correction_projection_id,last_valid_correction_price_id) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20)",params![id,material_id,material_version_id,before.source_id,receipt_id,baseline_receipt,boundary,q.micros(),v.micros(),time,seq,production_effect_id,baseline_production,observation_version_id,baseline_observation,waste_id,reconciliation_effect_id,baseline_reconciliation,baseline_correction,last_price]).map_err(unavailable)?;
+    connection.execute("INSERT INTO holding_heads(material_id,current_version_id,last_valid_version_id,last_valid_correction_price_id) VALUES(?1,?2,?3,?4) ON CONFLICT(material_id) DO UPDATE SET current_version_id=excluded.current_version_id,last_valid_version_id=excluded.last_valid_version_id,last_valid_correction_price_id=excluded.last_valid_correction_price_id,unknown_correction_projection_id=NULL",params![material_id,id,last_holding,last_price]).map_err(unavailable)?;
     Ok(id)
 }
 
@@ -427,13 +532,51 @@ impl Store {
         let history = versions(&self.connection, Some(&id))?;
         let observations = stocktake::versions(&self.connection)?;
         let reconciliations = super::reconciliation::records(&self.connection)?;
+        let corrections = super::correction::snapshot_rows(&self.connection)?;
+        let latest_correction = corrections
+            .projection_versions
+            .iter()
+            .filter(|p| p.projection.kind() == "material" && p.projection.subject_id() == id)
+            .max_by_key(|p| p.seq.parse::<i64>().unwrap_or(-1));
+        let correction_boundary = latest_correction
+            .and_then(|p| p.seq.parse::<i64>().ok())
+            .unwrap_or(0);
+        let correction = latest_correction.map(|p| HoldingCorrection {
+            id: p.correction_id.clone(),
+            recorded_at: p.recorded_at.clone(),
+            seq: p.seq.clone(),
+        });
+        let corrected_holding = latest_correction
+            .and_then(|p| match &p.projection {
+                super::correction::Projection::Material {
+                    holding_version_id, ..
+                } => holding_version_id.as_deref(),
+                _ => None,
+            })
+            .and_then(|id| history.iter().find(|h| h.id == id));
         if let Some(first) = history
             .iter()
             .rev()
-            .find(|h| h.observation_version_id.is_some())
-            .or_else(|| history.first())
+            .find(|h| {
+                h.observation_version_id.is_some()
+                    && h.seq.parse::<i64>().is_ok_and(|n| n > correction_boundary)
+            })
+            .or(corrected_holding)
+            .or_else(|| {
+                history
+                    .iter()
+                    .find(|h| h.seq.parse::<i64>().is_ok_and(|n| n > correction_boundary))
+            })
         {
-            let baseline = input_from_history(&history, &observations, Some(first))?;
+            let mut baseline = input_from_history(&history, &observations, Some(first))?;
+            if let Some(id) = &first.correction_projection_id {
+                baseline.basis = Some(HoldingBasisRef {
+                    kind: HoldingBasisKind::Correction,
+                    id: Some(id.clone()),
+                    seq: Some(first.seq.clone()),
+                });
+                baseline.observation = None;
+            }
             let mut changes = super::receipt::records(&self.connection, Some(&id), None)?
                 .into_iter()
                 .filter(|r| !reconciliations.iter().any(|s| s.receipt_id == r.id))
@@ -504,6 +647,10 @@ impl Store {
             );
             changes.sort_by_key(|c| c.seq().parse::<i64>().unwrap_or(-1));
             view = project_holding(&baseline, &changes).map_err(unavailable)?;
+            if first.correction_projection_id.is_some() {
+                view.basis = current.basis.clone();
+                view.observation = current.observation.clone();
+            }
             if let Some(amounts) = &mut view.settlement_basis {
                 amounts.source_id = current.source_id.clone();
             }
@@ -533,6 +680,7 @@ impl Store {
                 catalog::registered_price(&self.connection, &id)?,
             )?,
             state: catalog::state(&self.connection)?,
+            correction,
         }))
     }
 }
@@ -550,6 +698,7 @@ pub(super) fn validate_holding_schema(connection: &Connection) -> anyhow::Result
         &super::reconciliation::effects(connection)?,
         &versions,
         &heads,
+        &super::correction::snapshot_rows(connection)?.projection_versions,
     )?;
     for material in versions
         .iter()
@@ -617,7 +766,21 @@ pub(super) fn validate_snapshot_reconciled(
     reconciliation_effects: &[super::reconciliation::MaterialEffectRow],
     versions: &[HoldingVersion],
     heads: &[HoldingHead],
+    corrections: &[super::correction::ProjectionVersionRow],
 ) -> Result<(), StoreError> {
+    if !corrections.is_empty() {
+        return validate_corrected_holdings(
+            receipts,
+            effects,
+            observations,
+            wastes,
+            reconciliations,
+            reconciliation_effects,
+            versions,
+            heads,
+            corrections,
+        );
+    }
     use std::collections::{BTreeMap, HashSet};
     let bad = || unavailable("보유 버전의 원천·이전·현재·마지막 기준이 다릅니다");
     let ordinary_receipts = receipts
@@ -846,7 +1009,7 @@ pub(super) fn validate_snapshot_reconciled(
             .iter()
             .find(|h| h.material_id == material)
             .ok_or_else(bad)?;
-        if Some(head.current_version_id.as_str()) != previous
+        if head.current_version_id.as_deref() != previous
             || head.last_valid_version_id.as_deref() != last_valid
         {
             return Err(bad());
@@ -859,6 +1022,303 @@ pub(super) fn validate_snapshot_reconciled(
         || used_reconciliations.len() != reconciliation_effects.len()
     {
         return Err(bad());
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn validate_corrected_holdings(
+    receipts: &[crate::receipt::ReceiptRecord],
+    effects: &[production::EffectRow],
+    observations: &[stocktake::VersionRow],
+    wastes: &[crate::waste::WasteRecord],
+    reconciliations: &[crate::reconciliation::ReceiptReconciliation],
+    reconciliation_effects: &[super::reconciliation::MaterialEffectRow],
+    versions: &[HoldingVersion],
+    heads: &[HoldingHead],
+    corrections: &[super::correction::ProjectionVersionRow],
+) -> Result<(), StoreError> {
+    use std::collections::HashSet;
+    let bad = || unavailable("정정 이후 보유 원천·계산 경계·현재 값이 다릅니다");
+    let mut ids = HashSet::new();
+    let mut sources = HashSet::new();
+    for h in versions {
+        if Uuid::parse_str(&h.id).map_err(unavailable)?.to_string() != h.id || !ids.insert(&h.id) {
+            return Err(bad());
+        }
+        let n = h.seq.parse::<i64>().map_err(unavailable)?;
+        if n <= 0
+            || n.to_string() != h.seq
+            || chrono::DateTime::parse_from_rfc3339(&h.recorded_at).is_err()
+        {
+            return Err(bad());
+        }
+        let before = input_at(versions, observations, corrections, &h.material_id, n - 1)?;
+        if h.previous_version_id != before.source_id {
+            return Err(bad());
+        }
+        let q = Quantity::parse(&h.quantity).map_err(unavailable)?;
+        let v = Money::parse(&h.value).map_err(unavailable)?;
+        if q.micros() == 0 && v.micros() != 0 {
+            return Err(bad());
+        }
+        let count = [
+            h.receipt_id.is_some(),
+            h.production_effect_id.is_some(),
+            h.observation_version_id.is_some(),
+            h.waste_id.is_some(),
+            h.reconciliation_effect_id.is_some(),
+            h.correction_projection_id.is_some(),
+        ]
+        .into_iter()
+        .filter(|x| *x)
+        .count();
+        if count != 1 {
+            return Err(bad());
+        }
+        if let Some(id) = &h.correction_projection_id {
+            let p = corrections.iter().find(|p| &p.id == id).ok_or_else(bad)?;
+            let super::correction::Projection::Material {
+                change,
+                holding_version_id: Some(actual),
+                price_basis_id,
+                ..
+            } = &p.projection
+            else {
+                return Err(bad());
+            };
+            let crate::correction::CorrectionHoldingState::Known { amounts, .. } = &change.after
+            else {
+                return Err(bad());
+            };
+            if actual != &h.id
+                || change.material_id != h.material_id
+                || change.material_version_id != h.material_version_id
+                || p.seq != h.seq
+                || p.recorded_at != h.recorded_at
+                || amounts.quantity != h.quantity
+                || amounts.value.as_deref() != Some(&h.value)
+                || price_basis_id != &h.last_valid_correction_price_id
+            {
+                return Err(bad());
+            }
+            continue;
+        }
+        let mut expected_basis = before.basis.clone();
+        let (owner, version, time, sequence, iq, iv, oq, ov, source) =
+            if let Some(id) = &h.receipt_id {
+                let r = receipts.iter().find(|r| &r.id == id).ok_or_else(bad)?;
+                if reconciliations.iter().any(|s| s.receipt_id == r.id) {
+                    return Err(bad());
+                }
+                if expected_basis.is_none() {
+                    expected_basis = Some(HoldingBasisRef {
+                        kind: HoldingBasisKind::Receipt,
+                        id: Some(id.clone()),
+                        seq: Some(h.seq.clone()),
+                    });
+                }
+                (
+                    &r.material_id,
+                    &r.material_version_id,
+                    &r.recorded_at,
+                    &r.seq,
+                    0,
+                    0,
+                    Quantity::parse(&r.quantity).map_err(unavailable)?.micros(),
+                    Money::parse(&r.amount).map_err(unavailable)?.micros(),
+                    format!("receipt:{id}"),
+                )
+            } else if let Some(id) = &h.production_effect_id {
+                let e = effects.iter().find(|e| &e.id == id).ok_or_else(bad)?;
+                if expected_basis.is_none() {
+                    expected_basis = Some(HoldingBasisRef {
+                        kind: HoldingBasisKind::Production,
+                        id: Some(id.clone()),
+                        seq: Some(h.seq.clone()),
+                    });
+                }
+                (
+                    &e.material_id,
+                    &e.material_version_id,
+                    &e.recorded_at,
+                    &e.seq,
+                    Quantity::parse(&e.input_quantity)
+                        .map_err(unavailable)?
+                        .micros(),
+                    Money::parse(&e.input_value).map_err(unavailable)?.micros(),
+                    Quantity::parse(&e.output_quantity)
+                        .map_err(unavailable)?
+                        .micros(),
+                    Money::parse(&e.output_value).map_err(unavailable)?.micros(),
+                    format!("production:{id}"),
+                )
+            } else if let Some(id) = &h.observation_version_id {
+                let o = observations.iter().find(|o| &o.id == id).ok_or_else(bad)?;
+                if o.correction_projection_id.is_some() {
+                    return Err(bad());
+                }
+                expected_basis = Some(HoldingBasisRef {
+                    kind: HoldingBasisKind::Observation,
+                    id: Some(id.clone()),
+                    seq: Some(h.seq.clone()),
+                });
+                (
+                    &o.effect.material_id,
+                    &o.effect.material_version_id,
+                    &o.recorded_at,
+                    &o.seq,
+                    before.quantity.map(|q| q.micros()).unwrap_or(0),
+                    before.value.map(|v| v.micros()).unwrap_or(0),
+                    Quantity::parse(&o.effect.after.quantity)
+                        .map_err(unavailable)?
+                        .micros(),
+                    Money::parse(o.effect.after.value.as_deref().ok_or_else(bad)?)
+                        .map_err(unavailable)?
+                        .micros(),
+                    format!("observation:{id}"),
+                )
+            } else if let Some(id) = &h.waste_id {
+                let w = wastes.iter().find(|w| &w.id == id).ok_or_else(bad)?;
+                (
+                    &w.effect.material_id,
+                    &w.effect.material_version_id,
+                    &w.recorded_at,
+                    &w.seq,
+                    Quantity::parse(&w.effect.quantity)
+                        .map_err(unavailable)?
+                        .micros(),
+                    Money::parse(&w.effect.loss_value)
+                        .map_err(unavailable)?
+                        .micros(),
+                    0,
+                    0,
+                    format!("waste:{id}"),
+                )
+            } else if let Some(id) = &h.reconciliation_effect_id {
+                let e = reconciliation_effects
+                    .iter()
+                    .find(|e| &e.id == id)
+                    .ok_or_else(bad)?;
+                if expected_basis.is_none() {
+                    expected_basis = Some(HoldingBasisRef {
+                        kind: HoldingBasisKind::Reconciliation,
+                        id: Some(id.clone()),
+                        seq: Some(h.seq.clone()),
+                    });
+                }
+                let added = Money::parse(&e.effect.inflow_value)
+                    .map_err(unavailable)?
+                    .micros()
+                    .checked_add(super::reconciliation::signed(&e.effect.value_delta)?)
+                    .ok_or_else(bad)?;
+                (
+                    &e.effect.material_id,
+                    &e.effect.material_version_id,
+                    &e.recorded_at,
+                    &e.seq,
+                    0,
+                    0,
+                    Quantity::parse(&e.effect.inflow_quantity)
+                        .map_err(unavailable)?
+                        .micros(),
+                    added,
+                    format!("reconciliation:{id}"),
+                )
+            } else {
+                return Err(bad());
+            };
+        let beforeq = before.quantity.map(|q| q.micros()).unwrap_or(0);
+        let beforev = before.value.map(|v| v.micros()).unwrap_or(0);
+        let expectedq = beforeq
+            .checked_sub(iq)
+            .and_then(|n| n.checked_add(oq))
+            .ok_or_else(bad)?;
+        let expectedv = beforev
+            .checked_sub(iv)
+            .and_then(|n| n.checked_add(ov))
+            .ok_or_else(bad)?;
+        if !sources.insert(source)
+            || owner != &h.material_id
+            || version != &h.material_version_id
+            || time != &h.recorded_at
+            || sequence != &h.seq
+            || expectedq != q.micros()
+            || expectedv != v.micros()
+            || Some(basis(h)?) != expected_basis
+        {
+            return Err(bad());
+        }
+    }
+    let ordinary = receipts
+        .iter()
+        .filter(|r| !reconciliations.iter().any(|s| s.receipt_id == r.id))
+        .count();
+    if sources.len()
+        != ordinary
+            + effects.len()
+            + observations
+                .iter()
+                .filter(|o| o.correction_projection_id.is_none())
+                .count()
+            + wastes.len()
+            + reconciliation_effects.len()
+    {
+        return Err(bad());
+    }
+    let at = versions
+        .iter()
+        .map(|h| h.seq.parse::<i64>().unwrap_or(0))
+        .chain(
+            corrections
+                .iter()
+                .map(|p| p.seq.parse::<i64>().unwrap_or(0)),
+        )
+        .max()
+        .unwrap_or(0);
+    let mut material_ids = versions
+        .iter()
+        .map(|h| h.material_id.as_str())
+        .collect::<HashSet<_>>();
+    for p in corrections {
+        if let super::correction::Projection::Material { change, .. } = &p.projection {
+            material_ids.insert(&change.material_id);
+        }
+    }
+    if material_ids.len() != heads.len() {
+        return Err(bad());
+    }
+    for material in material_ids {
+        let state = input_at(versions, observations, corrections, material, at)?;
+        let head = heads
+            .iter()
+            .find(|h| h.material_id == material)
+            .ok_or_else(bad)?;
+        if head.current_version_id != state.source_id {
+            return Err(bad());
+        }
+        if state.quantity.is_none() {
+            let p=corrections.iter().filter(|p|matches!(&p.projection,super::correction::Projection::Material{change,..} if change.material_id==material)).max_by_key(|p|p.seq.parse::<i64>().unwrap_or(-1)).ok_or_else(bad)?;
+            if head.unknown_correction_projection_id.as_deref() != Some(&p.id)
+                || head.last_valid_version_id.is_some()
+                || head.last_valid_correction_price_id.is_some()
+            {
+                return Err(bad());
+            }
+        } else {
+            if head.unknown_correction_projection_id.is_some() {
+                return Err(bad());
+            }
+            let last = state.last_valid.as_ref().map(|p| p.source_id());
+            if head
+                .last_valid_version_id
+                .as_deref()
+                .or(head.last_valid_correction_price_id.as_deref())
+                != last
+            {
+                return Err(bad());
+            }
+        }
     }
     Ok(())
 }

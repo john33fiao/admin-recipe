@@ -73,6 +73,10 @@ impl Store {
         tx.execute("INSERT INTO mutation_requests(request_id,operation,payload,response,epoch,sequence) VALUES(?1,?2,?3,?4,?5,?6)",
             params![request_id,operation,payload,serde_json::to_string(&response).map_err(unavailable)?,state.epoch,sequence]).map_err(unavailable)?;
         let snapshot_json = snapshot::encode(&tx, sequence, request_id, &recorded_at)?;
+        // Semantic evidence belongs to the same transaction as its rows. A
+        // bad projection must roll back; recovery only retries publication of
+        // an already validated snapshot after commit.
+        snapshot::validate(&snapshot_json, sequence)?;
         tx.execute(
             "UPDATE snapshot_outbox SET payload=?1 WHERE sequence=?2",
             params![snapshot_json, sequence],

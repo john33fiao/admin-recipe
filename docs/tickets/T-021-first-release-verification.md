@@ -46,3 +46,5 @@ T-017·T-019 완료 후 README의 build·Rust fmt/test/clippy·UI test/typecheck
 ### 선행 티켓의 누적 비용 관측
 
 T-010에서 가상 판매101건을 정상 Store 초안/확정으로 누적한 뒤 실사 배분을 검증했다. `cargo test --locked --no-fail-fast`의 `stocktake_storage` 14개는 모두 통과했지만 Windows x64의 debug 실행에서629.75초가 걸렸고 대부분은101건 누적 사례였다. 변경마다 기존 전체 JSON을 재검증하는 현재 저장 경로의 비용이 포함된다. 이는 release 성능이나 개별 저장 지연을 분리 측정한 결과가 아니다. T-021-03에서 release·자료 규모별 저장/시작 검사 시간과 JSON 누적 크기를 측정하고 보존·무결성 조건을 유지하는 개선을 검토한다.
+
+T-012의 전체 Rust 회귀443건도 통과했으며 같은 `stocktake_storage`14건은682.86초였다. 정정 원본/유효 이력과 커밋 전 의미 검증이 추가된 상태의 debug 근거로 보존한다. 이 수치만으로 release 성능이나 배포 준비를 판정하지 않는다.
