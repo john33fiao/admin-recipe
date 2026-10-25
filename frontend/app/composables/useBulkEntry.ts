@@ -165,6 +165,7 @@ export function useBulkEntry() {
   function applyCurrentDraft(entry: BulkItem) {
     const detail = draftUpdates.value[entry.id], row = session.value.rows.find(value => value.id === entry.rowIds[0])
     if (busy.value || entry.result || entry.pending || !session.value.review?.items.includes(entry) || !detail || !row || completed(row)) return
+    if (detail.head.payload.kind === 'receipt' && detail.head.payload.data.source.kind === 'order') { notice.value = '발주에 연결된 입고 초안은 이 표에 적용할 수 없습니다. 초안 화면에서 계속해 주세요.'; return }
     try {
       if (!applyBulkDraft(entry, row, detail, retain)) return
       delete draftUpdates.value[entry.id]; session.value.fingerprint = ''; persist(); notice.value = '현재 초안의 내용을 표에 적용했습니다. 다시 확인한 뒤 이어서 등록해 주세요.'

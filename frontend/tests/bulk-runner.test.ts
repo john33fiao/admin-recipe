@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import type { BulkReview } from '../app/types/bulk.ts'
+import type { BulkReview, BulkSession } from '../app/types/bulk.ts'
 import type { ReceiptBusinessEffect } from '../app/types/receipt.ts'
 import type { BusinessDetail } from '../app/types/business.ts'
 import { runBulk, inspectBulkDraft, applyBulkDraft } from '../app/utils/bulk-runner.ts'
@@ -91,4 +91,34 @@ test('an old external draft cannot replace a completed receipt row or its saved 
   assert.equal(JSON.stringify({ row, entry }), untouched)
   assert.equal(applyBulkDraft(entry, row, detail, () => { retained++ }), true)
   assert.equal(row.values.amount, '5'); assert.equal(entry.command.kind === 'receipt' && entry.command.payload.data.amount, '5'); assert.equal(entry.draft!.head_id, epoch); assert.equal(retained, 1)
+})
+test('explicitly applied incomplete external receipts survive reload as editable input without relaxing pending or success checks', () => {
+  for (const basis of [null, head, '수정할 원래 근거']) {
+    const row = makeBulkRow('receipt', { material_id: target, quantity: '10', unit: 'g', amount: '0', receipt_date: '2026-10-20', note: ' 원문 메모 ', stock_effect: 'unreflected' }, () => target)
+    const payload = { kind: 'receipt' as const, version: 1 as const, data: { source: { kind: 'direct' as const, material_id: target, material_version_id: head }, quantity: '10', unit: 'g', amount: '0', receipt_date: '2026-10-20', note: ' 원문 메모 ', stock_effect: { kind: 'unreflected' as const } } }
+    const entry: BulkReview['items'][number] = { id: target, rowIds: [target], label: '가상 미완성 입고', command: { kind: 'receipt', payload }, effect: null, preview: null, draft: { id: target, head_id: head }, result: null, pending: null, recovery: '', failure: '' }
+    const detail: BusinessDetail = { item: { id: target, kind: 'receipt', head_id: epoch, status: 'draft', created_at: '', updated_at: '', corrects_confirmation_id: null, confirmation_id: null, effective_confirmation_id: null, issue_count: 1, material_name: '가상' }, head: { id: epoch, record_id: target, previous_revision_id: head, status: 'draft', payload: { ...payload, data: { ...payload.data, stock_effect: { kind: 'needs_reconciliation', basis_id: basis, included_quantity: ' 원래 확인 중 ' } } }, recorded_at: '', seq: '4' }, revisions: [], confirmations: [], corrections: [], issues: [], state: { epoch, revision: '4' } }
+    assert.equal(inspectBulkDraft(entry, detail), 'changed')
+    const session: BulkSession = { version: 1, kind: 'receipt', rows: [row], review: { state: { epoch, revision: '4' }, items: [entry], errors: { [target]: { stock_effect: entry.failure } }, warnings: [] }, fingerprint: '', acceptedWarnings: false, duplicate: false }
+    let original = ''
+    assert.equal(applyBulkDraft(entry, row, detail, () => { original = JSON.stringify(session) }), true)
+    assert.equal(JSON.parse(original).rows[0].values.stock_effect, 'unreflected')
+    const restored = restoreBulkSession(JSON.stringify(session))
+    assert.deepEqual(restored, session)
+    assert.equal(restored!.rows[0]!.values.stock_effect, 'needs_reconciliation')
+    for (const invalid of [{ kind: 'needs_reconciliation', basis_id: 1, included_quantity: '' }, { kind: 'needs_reconciliation', basis_id: null, included_quantity: null }, { kind: 'needs_reconciliation', basis_id: null, included_quantity: '', injected: true }]) {
+      const forged = structuredClone(session) as unknown as { review: { items: Array<{ command: { payload: { data: { stock_effect: unknown } } } }> } }
+      forged.review.items[0]!.command.payload.data.stock_effect = invalid
+      assert.equal(restoreBulkSession(JSON.stringify(forged)), null)
+    }
+    if (basis === '수정할 원래 근거') {
+      const pending = structuredClone(session)
+      if (entry.command.kind !== 'receipt') throw Error('receipt required')
+      pending.review!.items[0]!.pending = { kind: 'receipt', request: { action: 'create', record_id: null, body: { meta: { request_id: head, epoch, expected_revision: '4' }, payload: entry.command.payload, corrects_confirmation_id: null } } }
+      assert.equal(restoreBulkSession(JSON.stringify(pending)), null)
+      const success = structuredClone(session)
+      success.review!.items[0]!.result = { id: head, href: `/receipts/${head}` }
+      assert.equal(restoreBulkSession(JSON.stringify(success)), null)
+    }
+  }
 })

@@ -176,3 +176,34 @@ test('manual correction after an external draft review clears the old action and
   expect(item.draft.id).not.toBe(oldDraftId); expect(item.command.payload.data.amount).toBe('7'); expect(completed.rows[1].values.amount).toBe('7'); expect(receipt.item.amount).toBe('7'); await expect(page.getByLabel('2행 구입금액', { exact: true })).not.toBeEditable(); await expect(page.getByRole('button', { name: '현재 초안 내용으로 표 갱신', exact: true })).toHaveCount(0)
   const preserved = await get(page, `/api/business/${oldDraftId}`); expect(preserved.item.status).toBe('draft'); expect(preserved.head.payload.data.amount).toBe('5'); expect((await get(page, '/api/receipts')).items).toHaveLength(2)
 })
+
+test('an explicitly applied incomplete external receipt survives reload and can be corrected without automatic writes', async ({ page }) => {
+  await open(page); const raw = await material(page, '가상 미완성 초안 보존')
+  await page.getByLabel('등록 대상', { exact: true }).selectOption('receipt'); await csv(page, receiptHeader + `${raw.id},10,g,0,2024-02-29,,unreflected,,\n${raw.id},20,g,0,2024-02-29,,unreflected,,`); await prepare(page); await page.getByLabel('중복·같은 이름·순차 등록 안내를 확인했습니다', { exact: true }).check(); await submit(page).click(); await expect(page.getByRole('heading', { name: '변경된 입고 효과', exact: true })).toBeVisible()
+  const partial = JSON.parse((await page.evaluate(() => sessionStorage.getItem('sunchang.bulk.session.v1')))!), draftId = partial.review.items[1].draft.id, draft = await get(page, `/api/business/${draftId}`)
+  const effect = { kind: 'needs_reconciliation', basis_id: null, included_quantity: '' }
+  await post(page, `/api/business/${draftId}/draft-revisions`, { meta: await meta(page), expected_head_id: draft.head.id, payload: { ...draft.head.payload, data: { ...draft.head.payload.data, note: '가상 확인 필요 원문', stock_effect: effect } } })
+  await page.getByRole('button', { name: '변경된 미리보기 확인', exact: true }).click(); await submit(page).click(); await page.getByRole('button', { name: '최신 자료 확인 후 입력 재검토', exact: true }).click(); await page.getByRole('button', { name: '현재 초안 내용으로 표 갱신', exact: true }).click()
+  let writes = 0
+  await page.route('**/api/business/**', route => { if (route.request().method() === 'POST' && !new URL(route.request().url()).pathname.endsWith('/preview')) writes++; return route.continue() })
+  await page.reload(); await expect(page.getByLabel('2행 재고 반영', { exact: true })).toHaveValue('needs_reconciliation'); await expect(page.getByLabel('2행 메모', { exact: true })).toHaveValue('가상 확인 필요 원문'); await expect(page.getByText('보관한 입력을 안전하게 읽지 못했습니다.', { exact: false })).toHaveCount(0); await expect(submit(page)).toBeDisabled()
+  const recovered = JSON.parse((await page.evaluate(() => sessionStorage.getItem('sunchang.bulk.session.v1')))!)
+  expect(recovered.review.items[1].command.payload.data.stock_effect).toEqual(effect); expect(recovered.review.items[1].pending).toBeNull(); expect(recovered.review.items[0].result).toEqual(partial.review.items[0].result); expect(writes).toBe(0); expect((await get(page, '/api/receipts')).items).toHaveLength(1)
+  await page.getByLabel('2행 재고 반영', { exact: true }).selectOption('unreflected'); await prepare(page); await run(page); expect(writes).toBe(2); expect((await get(page, '/api/receipts')).items).toHaveLength(2); const original = await get(page, `/api/business/${draftId}`); expect(original.item.status).toBe('draft'); expect(original.head.payload.data.stock_effect).toEqual(effect)
+})
+
+test('an externally order-linked receipt explains the unsupported table action and continues in its preserved draft', async ({ page }) => {
+  await open(page); const raw = await material(page, '가상 외부 주문 초안')
+  await page.getByLabel('등록 대상', { exact: true }).selectOption('receipt'); await csv(page, receiptHeader + `${raw.id},10,g,0,2024-02-29,,unreflected,,\n${raw.id},20,g,0,2024-02-29,,unreflected,,`); await prepare(page); await page.getByLabel('중복·같은 이름·순차 등록 안내를 확인했습니다', { exact: true }).check(); await submit(page).click(); await expect(page.getByRole('heading', { name: '변경된 입고 효과', exact: true })).toBeVisible()
+  const partial = JSON.parse((await page.evaluate(() => sessionStorage.getItem('sunchang.bulk.session.v1')))!), draftId = partial.review.items[1].draft.id, draft = await get(page, `/api/business/${draftId}`)
+  const source = { kind: 'order', order_id: null, expected_order_version_id: null, material_version_id: null }
+  await post(page, `/api/business/${draftId}/draft-revisions`, { meta: await meta(page), expected_head_id: draft.head.id, payload: { ...draft.head.payload, data: { ...draft.head.payload.data, source, note: '가상 주문 초안 원문' } } })
+  await page.getByRole('button', { name: '변경된 미리보기 확인', exact: true }).click(); await submit(page).click(); await page.getByRole('button', { name: '최신 자료 확인 후 입력 재검토', exact: true }).click()
+  await expect(page.getByText('발주에 연결된 입고 초안은 이 표에 적용할 수 없습니다. 초안 화면에서 계속해 주세요.', { exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: '현재 초안 내용으로 표 갱신', exact: true })).toHaveCount(0)
+  const retained = JSON.parse((await page.evaluate(() => sessionStorage.getItem('sunchang.bulk.session.v1')))!)
+  expect(retained.rows[1].values).toEqual(partial.rows[1].values); expect(retained.review.items[1].command).toEqual(partial.review.items[1].command); expect(retained.review.items[0].result).toEqual(partial.review.items[0].result); expect((await get(page, '/api/receipts')).items).toHaveLength(1)
+  await page.screenshot({ path: test.info().outputPath('bulk-order-draft-guidance.png'), fullPage: true })
+  const link = page.getByRole('link', { name: '초안·이력 보기', exact: true }); await expect(link).toHaveAttribute('href', `/business/${draftId}`); await link.click(); await expect(page.getByLabel('입고 방식', { exact: true })).toHaveValue('order'); await expect(page.getByLabel('메모 (선택)', { exact: true })).toHaveValue('가상 주문 초안 원문')
+  const original = await get(page, `/api/business/${draftId}`); expect(original.item.status).toBe('draft'); expect(original.head.payload.data.source).toEqual(source); expect((await get(page, '/api/receipts')).items).toHaveLength(1)
+})

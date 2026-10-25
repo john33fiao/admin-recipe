@@ -133,6 +133,7 @@ function invalidReceiptShape(value: unknown): boolean {
   const data = value.data
   if (!exact(data, ['source', 'quantity', 'unit', 'amount', 'receipt_date', 'note', 'stock_effect']) || !['quantity', 'unit', 'amount', 'receipt_date', 'note'].every(key => draftText(data[key])) || !object(data.source) || !exact(data.source, ['kind', 'material_id', 'material_version_id']) || data.source.kind !== 'direct' || ![data.source.material_id, data.source.material_version_id].every(id => id === null || draftText(id)) || !object(data.stock_effect)) return false
   const effect = data.stock_effect
+  if (effect.kind === 'needs_reconciliation') return exact(effect, ['kind', 'basis_id', 'included_quantity']) && (effect.basis_id === null || draftText(effect.basis_id)) && draftText(effect.included_quantity)
   return effect.kind === 'unreflected' ? exact(effect, ['kind']) : effect.kind === 'reconciled' && exact(effect, ['kind', 'selections']) && Array.isArray(effect.selections) && effect.selections.length <= 20 && effect.selections.every(selectionShape)
 }
 function commandShape(value: unknown, allowInvalid = false): value is BulkCommand {

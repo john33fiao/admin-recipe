@@ -2,6 +2,8 @@
 
 2026-10-25. 세 티켓을 [ADR-010](../decisions/ADR-010-unified-bulk-entry.md)의 공통 CSV/시트 편집표로 구현한다. [공통 계획의 Before4](../tickets/T-031-T-033-plan.md)는 세 티켓 각각에 적용한다. 아래 수용 기준은 실제 최종 후보의 관련 실행으로 확인했다. T-001/T-021의 외부 배포 조건은 별도다. 실제 볼트 연결 노트에도 범위·기술 선택·확인된 결과와 진행/미검증을 반영하고 재읽기·변경 역대조로 나머지 원문 보존을 확인했다.
 
+최종 후속 후보는 `3ca214f35218d3c175465d2e9430c96a5335a38499687fc37430d58e1925da53`다. 표준 빌드70.66초·종료0, UI165·타입0·최종 bulk13 PASS(14.0초)·Clippy0·자산 정합성0을 확인했다. 새6화면과 발주 안내1개도 직접 검토했다. 원래 완료 후보와 후속 RED/GREEN을 아래에 구분하며 서로 겹치는 시험 수를 합산하지 않는다.
+
 ## 구현과 수용 기준
 
 | 기준 | 구현·검증할 경로 | 상태 |
@@ -35,15 +37,15 @@
 
 동일 내용 안내는 현재 탭의 보관 결과이며 서버의 영구 중복 원장이 아니다. 새 앱 주소에서는 실제 목록 확인이 필요하다. 전 배치를 단일 트랜잭션으로 되돌리지 않으며 이미 성공한 행은 기존 정정/전체 복원 계약을 따른다. xlsx·수식/서식 편집·운영 전체 자료 이관은 포함하지 않는다.
 
-## 실제 실행 결과
+## 첫 완료 후보의 실행 결과
 
-환경은 macOS27.0.1 arm64, Rust/Cargo1.98.0, Node24.20.0·npm11.19.0, Playwright1.64.1·Chromium156.0.8078.4다. 최종 표준 `node scripts/build.mjs`는 종료0(77.81초), release SHA-256은 `fd360358df0f87eedf85a7c660082878cf6e6053cde4d77d01238824ab90d754`다. UI20경로 생성과 release의 홈/프로젝트 경로 검사1개를 통과했다.
+환경은 macOS27.0.1 arm64, Rust/Cargo1.98.0, Node24.20.0·npm11.19.0, Playwright1.64.1·Chromium156.0.8078.4다. 첫 완료 후보의 표준 `node scripts/build.mjs`는 종료0(77.81초), release SHA-256은 `fd360358df0f87eedf85a7c660082878cf6e6053cde4d77d01238824ab90d754`다. UI20경로 생성과 release의 홈/프로젝트 경로 검사1개를 통과했다.
 
 | 실행 | 실제 결과 |
 | --- | --- |
 | `npm --prefix frontend test` | 164 PASS·실패0. 이전144 및 각 RED/GREEN 재실행과 합산하지 않음 |
 | `npm --prefix frontend run typecheck` | 종료0 |
-| `cargo test --locked --test receipt_http` | 최종 UI 갱신 후12 PASS·실패0. 신규 읽기 전용 경계4개 포함, 전체 Rust 회귀와 겹침 |
+| `cargo test --locked --test receipt_http` | 해당 UI 갱신 후12 PASS·실패0. 신규 읽기 전용 경계4개 포함, 전체 Rust 회귀와 겹침 |
 | `npm --prefix frontend run test:e2e -- bulk.spec.ts --output=../tmp/verification/bulk-browser-final/run-2-results --reporter=line` | 신규11 시나리오 PASS·실패0, 12.8초 |
 | `cargo fmt --check` / `cargo clippy --locked --all-targets -- -D warnings` | 각각 종료0 |
 | `node --test scripts/ui-manifest.test.mjs` / `node scripts/ui-manifest.mjs --check` | 시험1 PASS / 최종 산출물 정합성 종료0 |
@@ -76,5 +78,15 @@ HTTP4개는 정상/미완성/0원·같은 기존 inspector의 효과 동등, can
 - [Step 9] 품질 검증 - PASS: 위 실제 관련 빌드/단위/타입/HTTP/브라우저/정적·자산 검사와 문서 인코딩/링크/diff/제외 경계 검토를 수행했다.
 - [Step 10] 사용자 흐름 - PASS: 세 입력 방식의 실제 오류 수정→확인→등록→조회와 키보드/6화면을 확인했고 README에서 절차·한계로 연결한다.
 - [Step 11] 발견 원인 - PASS: 최초 실패·제품/시험 원인·최소 수정·후속 실행을 위에 구분했다.
-- [Step 12] READY - PASS: T-031~T-033의 구현·관련 수용 검증 범위는 READY다. T-001/T-021·전체 배포 준비의 완료를 뜻하지 않는다.
-- [Step 13] 커밋 준비 - PASS: 사용자 승인 범위의 공개35경로만 스테이징했고 기존 staged 변경은 없었다. 실제 status/unstaged/staged diff와 각 경로의 `git check-ignore --no-index -v`·공개 경계를 확인했다. T-021의 진행 문서/실행기와 모든 제외 자료는 이 커밋에서 분리한다.
+- [Step 12] READY - PASS: 후속 미완성 초안 재열기와 발주 연결 안내까지 최종13개 실제 UI·관련 검증을 확인했다. T-031~T-033 범위는 READY이며 T-001/T-021·전체 배포 준비의 완료를 뜻하지 않는다.
+- [Step 13] 커밋 준비 - PASS: 초기6dbdd79의35경로에 이어 후속12경로의 실제 status/unstaged/staged·개별 제외 규칙·공개 경계를 검토했다. 공유 문서는 기능 관련 부분만 스테이징하고 T-021 관측 시험/실행기와 모든 제외 자료를 분리한다. 실제 볼트의 최종 결과 대응도 재읽기·원문 역대조로 확인했다.
+
+## 후속 편집 보관 경계 — 최종 실제 UI 확인
+
+외부 화면에서 입고 초안을 미완성 `needs_reconciliation`으로 수정한 뒤 일괄 입력에서 명시 적용하면, 편집본 복원 분기가 이를 받지 않아 reload 시 읽기 실패로 분류했다. 실제 `inspectBulkDraft`→`applyBulkDraft`→세션 직렬화/복원에서 null 반환 RED를 확보했다. 편집 중이며 pending/result가 없는 경우의 닫힌 `kind`·`basis_id`·`included_quantity` 형식만 보완했다. 미지 필드/비문자열·잘못된 pending/success는 계속 거절하고 null/UUID/수정할 원문은 그대로 보존한다.
+
+후속 단위는165 PASS·타입/구문/diff0이다. 첫 후속 빌드 뒤 미완성 초안 reload·수정·등록을 포함한12개 UI는 통과했다.13번째 발주 연결 안내 시험은 안내가 없어 실패했고 실제 화면에는 무응답 적용 버튼이 남아 있었다. 완료 전 버튼 개수0을 읽던 시험 관측도 안내/완료 표시 뒤의 단언으로 보완했다. direct 초안에만 적용 버튼을 표시하고 발주 연결은 이유와 기존 초안 링크로 안내하며 handler도 원문을 바꾸지 않도록 수정했다.
+
+최종 표준 빌드 뒤 같은13개를 모두 통과했다.13번째는 원표/앞선 성공행·입고 건수 불변과 발주 초안 화면의 실제 계속 입력까지 확인한다. 실제 UTC 실행은03:37:27.248~03:37:41.634, exit0·signal 없음·전후 SHA 동일이다. 제품 변경은 bulk 편집 복원 분기·버튼 조건·handler 안내의3파일이며 신규 writer·발주 일괄 지원·스키마·단위/재고 정책은 추가하지 않았다. DB·파일의 정상 변경/복원은 기존 API 계약을 유지한다. 최초12와 최종13, 단위 반복 및 T-021의 기존 회귀를 합산하지 않는다.
+
+후속 Before4에서도 정상 외부 미완성 초안의 원본문 보존·닫힌 편집 형식·pending/success 검증 유지·unsupported 발주 초안의 명시 안내를 범위로 정했다. null 반환 및 안내 누락의 RED 뒤 최소 수정했고, 표준 빌드와 실제13 시나리오·7개 화면으로 확인했다. 독립 코드/실패 trace 검토와 최종 원문 대조에 비춰 위 After13은 세 티켓 각각의 후속 변경에도 적용한다.
