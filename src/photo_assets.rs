@@ -392,6 +392,60 @@ pub fn read_photo(
 pub fn verify_photo(root: &Path, descriptor: &PhotoAssetDescriptor) -> Result<(), PhotoAssetError> {
     read_photo(root, descriptor).map(|_| ())
 }
+
+/// Restore preflight classification, independent of presentation/error text.
+/// Existing upload, registered GET and publication keep their original API.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PhotoCheckError {
+    Missing,
+    UnsafePath,
+    Corrupt,
+}
+fn check_io(error: io::Error) -> PhotoCheckError {
+    match error.kind() {
+        io::ErrorKind::NotFound => PhotoCheckError::Missing,
+        io::ErrorKind::NotADirectory | io::ErrorKind::IsADirectory => PhotoCheckError::UnsafePath,
+        // Permission/device/read errors are unavailable contents, never proof of
+        // absence. The check blocks restore instead of silently skipping them.
+        _ => PhotoCheckError::Corrupt,
+    }
+}
+fn checked_photo_directory(parent: &Dir, path: &Path) -> Result<Dir, PhotoCheckError> {
+    let metadata = parent.symlink_metadata(path).map_err(check_io)?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(PhotoCheckError::UnsafePath);
+    }
+    parent.open_dir_nofollow(path).map_err(check_io)
+}
+pub fn check_photo(root: &Path, descriptor: &PhotoAssetDescriptor) -> Result<(), PhotoCheckError> {
+    validate_asset_descriptor(descriptor).map_err(|_| PhotoCheckError::Corrupt)?;
+    let absolute = std::path::absolute(root).map_err(check_io)?;
+    let parent_path = absolute.parent().ok_or(PhotoCheckError::UnsafePath)?;
+    let root_name = absolute.file_name().ok_or(PhotoCheckError::UnsafePath)?;
+    let parent = Dir::open_ambient_dir(parent_path, ambient_authority()).map_err(check_io)?;
+    let root = checked_photo_directory(&parent, Path::new(root_name))?;
+    let assets = checked_photo_directory(&root, Path::new("assets"))?;
+    let photos = checked_photo_directory(&assets, Path::new("photos"))?;
+    let filename = format!("{}.{}", descriptor.sha256, descriptor.format.extension());
+    let metadata = photos.symlink_metadata(&filename).map_err(check_io)?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(PhotoCheckError::UnsafePath);
+    }
+    // read_in uses a no-follow final handle, checks its regular type/length and
+    // hash, and never trusts the earlier metadata lookup to authorize reading.
+    let bytes = read_in(&photos, descriptor).map_err(|_| PhotoCheckError::Corrupt)?;
+    let upload = photo_upload(
+        &format!("verified.{}", descriptor.format.extension()),
+        Some(descriptor.format.mime()),
+        bytes,
+    )
+    .map_err(|_| PhotoCheckError::Corrupt)?;
+    let decoded = validate_photo(upload).map_err(|_| PhotoCheckError::Corrupt)?;
+    if decoded.descriptor() != descriptor {
+        return Err(PhotoCheckError::Corrupt);
+    }
+    Ok(())
+}
 pub fn publish_photo(
     root: &Path,
     photo: &ValidatedPhoto,

@@ -1,3 +1,4 @@
+import { currentAppState } from '../app/utils/current-state.ts'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
@@ -17,7 +18,7 @@ type Request = { path: string; body: any; resolve: (value: unknown) => void; rej
 function harness() {
   const states = new Map<string, vue.Ref>(), storage = new Map<string, string>(), requests: Request[] = []
   let sequence = 10
-  const context = createContext({ ...vue, ...business, ApiError, failureAction,
+  const context = createContext({ currentAppState, ...vue, ...business, ApiError, failureAction,
     useConnection: () => vue.ref('connected'),
     useState: (key: string, init: () => unknown) => { if (!states.has(key)) states.set(key, vue.ref(init())); return states.get(key) },
     sessionStorage: { getItem: (key: string) => storage.get(key) ?? null, setItem: (key: string, value: string) => storage.set(key, value), removeItem: (key: string) => storage.delete(key) },

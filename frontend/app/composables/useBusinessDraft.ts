@@ -4,6 +4,7 @@ import type { BusinessEditorHost, BusinessEditorSnapshot } from '~/types/workspa
 import { ApiError, apiRequest } from '~/utils/api'
 import { businessPending, confirmPending, copyPayload, restoreBusinessPending, sameBusinessTarget, samePayload, validBusinessPayload } from '~/utils/business'
 import { failureAction } from '~/utils/catalog'
+import { currentAppState } from '~/utils/current-state'
 
 export interface BusinessEditorInitial<T extends BusinessPayload = BusinessPayload> { payload: T; state: CatalogState; recordId: string | null; headId: string | null; status: BusinessStatus; corrects: string | null; issues: BusinessIssue[] }
 
@@ -46,7 +47,8 @@ export function useBusinessDraft<T extends BusinessPayload>(identity: string, in
   const canRetry = computed(() => !!pending.value && (!recovery.value || recovery.value === 'retry'))
   const canReview = computed(() => recovery.value === 'edit' || recovery.value === 'refresh')
   const previewOutdated = computed(() => {
-    const current = host?.currentState(), shown = preview.value?.state
+    const current = host?.currentState(), global = currentAppState.value, shown = preview.value?.state
+    if (global && shown && global.epoch !== shown.epoch) return true
     return !!current && !!shown && (current.epoch !== shown.epoch || BigInt(current.revision) > BigInt(shown.revision))
   })
   const awaitingPrior = computed(() => payload.value.kind === 'stocktake' && !!host?.awaitingPrior())
@@ -82,8 +84,9 @@ export function useBusinessDraft<T extends BusinessPayload>(identity: string, in
   watch([payload, status, dirty, busy, pending, recovery, failure, issues, preview], publish, { immediate: true, deep: true, flush: 'sync' })
 
   function failed(error: unknown) {
-    recovery.value = error instanceof ApiError ? error.status === 413 && (payload.value.kind === 'correction' || payload.value.kind === 'production' || payload.value.kind === 'stocktake' || payload.value.kind === 'receipt' && payload.value.data.stock_effect.kind === 'reconciled') ? 'edit' : failureAction(error.status, error.code) : 'retry'
-    if (recovery.value === 'refresh') failure.value = '다른 변경으로 자료가 갱신되어 이 요청은 처리하지 않았습니다. 최신 기록을 확인하고 입력과 미리보기를 다시 검토해 주세요.'
+    recovery.value = error instanceof ApiError ? error.status === 413 && (payload.value.kind === 'correction' || payload.value.kind === 'production' || payload.value.kind === 'stocktake' || payload.value.kind === 'receipt' && payload.value.data.stock_effect.kind === 'reconciled') ? 'edit' : failureAction(error.status, error.code, error.requestStatus) : 'retry'
+    if (error instanceof ApiError && (error.code === 'stale_generation' || error.code === 'stale_read')) failure.value = error.message
+    else if (recovery.value === 'refresh') failure.value = '다른 변경으로 자료가 갱신되어 이 요청은 처리하지 않았습니다. 최신 기록을 확인하고 입력과 미리보기를 다시 검토해 주세요.'
     else if (recovery.value === 'blocked') failure.value = '이 요청 ID에 다른 처리 이력이 있어 재전송할 수 없습니다. 업무 기록에서 처리 결과를 확인해 주세요.'
     else if (recovery.value === 'edit') failure.value = error instanceof Error ? error.message : '입력을 확인해 주세요.'
     else failure.value = pending.value ? '처리 완료를 확인하지 못했습니다. 요청과 입력을 유지했습니다. 같은 요청으로 재시도해 주세요.' : '자료를 확인하지 못했습니다. 연결을 확인하고 다시 시도해 주세요.'

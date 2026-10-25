@@ -14,6 +14,8 @@ pub mod receipt;
 pub mod recipe;
 pub mod recipe_connections;
 pub mod reconciliation;
+pub mod restore;
+pub mod restore_files;
 pub mod sale;
 pub mod server;
 pub mod statistics;

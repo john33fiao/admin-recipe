@@ -1,3 +1,4 @@
+import { currentAppState } from '../app/utils/current-state.ts'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
@@ -18,7 +19,7 @@ type Request = { path: string; body: any; resolve: (value: unknown) => void; rej
 function harness() {
   const storage = new Map<string, string>(), states = new Map<string, vue.Ref>(), requests: Request[] = []
   let serial = 10
-  const context = createContext({ ...vue, ...business, ApiError, failureAction,
+  const context = createContext({ currentAppState, ...vue, ...business, ApiError, failureAction,
     useConnection: () => vue.ref('connected'),
     useState: (key: string, init: () => unknown) => { if (!states.has(key)) states.set(key, vue.ref(init())); return states.get(key) },
     sessionStorage: { getItem: (key: string) => storage.get(key) ?? null, setItem: (key: string, value: string) => storage.set(key, value), removeItem: (key: string) => storage.delete(key) },
@@ -101,7 +102,7 @@ test('explicit new return after a completed create has a fresh request and keeps
 
 function sourceHarness() {
   const requests: Request[] = [], data = vue.ref<any>((draft() as any).data), disabled = vue.ref(false)
-  const context = createContext({ ...vue, useConnection: () => vue.ref('connected'), apiRequest: (path: string, body: unknown) => new Promise((resolve, reject) => requests.push({ path, body, resolve, reject })) })
+  const context = createContext({ currentAppState, ...vue, useConnection: () => vue.ref('connected'), apiRequest: (path: string, body: unknown) => new Promise((resolve, reject) => requests.push({ path, body, resolve, reject })) })
   const source = readFileSync(new URL('../app/composables/usePurchaseReturnSource.ts', import.meta.url), 'utf8').replace(/^import .*$/gm, '').replace('export function usePurchaseReturnSource', 'function usePurchaseReturnSource')
   runInContext(ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, context)
   const scope = vue.effectScope(), editor = scope.run(() => context.usePurchaseReturnSource(data, disabled))!

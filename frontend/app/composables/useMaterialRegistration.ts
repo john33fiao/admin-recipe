@@ -24,6 +24,7 @@ export function useMaterialRegistration() {
   const reviewing = useState('material-reviewing', () => false)
   const failure = useState('material-failure', () => '')
   const recovery = useState<'edit' | 'refresh' | 'blocked' | 'retry' | ''>('material-recovery', () => '')
+  const processed = useState('material-processed-before-restore', () => false)
   const rejected = computed(() => ['edit', 'refresh', 'blocked'].includes(recovery.value))
   const saved = useState<Material | null>('material-saved', () => null)
   const state = useState<CatalogState | null>('material-registration-state', () => null)
@@ -70,11 +71,13 @@ export function useMaterialRegistration() {
       recovery.value = ''
       return material
     } catch (error) {
-      recovery.value = error instanceof ApiError ? failureAction(error.status, error.code) : 'retry'
+      processed.value = error instanceof ApiError && error.code === 'stale_generation' && error.requestStatus === 'already_processed'
+      recovery.value = error instanceof ApiError ? failureAction(error.status, error.code, error.requestStatus) : 'retry'
       if (recovery.value === 'refresh') failure.value = '다른 변경으로 자료가 갱신되어 이 등록은 저장하지 않았습니다. 최신 상태를 확인한 뒤 입력을 다시 확인해 주세요.'
       else if (recovery.value === 'blocked') failure.value = '이 요청 ID에 다른 처리 이력이 있어 재전송할 수 없습니다. 목록에서 저장 결과를 먼저 확인해 주세요.'
       else if (recovery.value === 'edit') failure.value = error instanceof Error ? error.message : '입력 내용을 확인해 주세요.'
       else failure.value = '등록 완료를 확인하지 못했습니다. 자료가 저장되었더라도 변경 기록이 아직 남지 않았을 수 있습니다. 입력 내용을 유지했으니 연결을 확인한 뒤 같은 요청을 재시도해 주세요.'
+      if (error instanceof ApiError && (error.code === 'stale_generation' || error.code === 'stale_read')) failure.value = error.message
       return null
     } finally { saving.value = false }
   }
@@ -95,5 +98,22 @@ export function useMaterialRegistration() {
     } catch { failure.value = '최신 상태를 확인하지 못했습니다. 연결을 확인하고 다시 시도해 주세요.'; return false }
     finally { reviewing.value = false }
   }
-  return { name, unit, kind, description, pending, saving, reviewing, failure, saved, rejected, recovery, draftRestored, draftFailure, save, editRejected }
+  async function newInput() {
+    if (!processed.value || !pending.value || saving.value || reviewing.value || connection.value !== 'connected') return false
+    const request = pending.value
+    reviewing.value = true
+    try {
+      const latest = await apiRequest<CatalogState>('/api/state')
+      if (pending.value?.request_id !== request.request_id) return false
+      sessionStorage.setItem(`sunchang.retained.material.${request.request_id}`, JSON.stringify({ pending: request, draft: { name: name.value, unit: unit.value, kind: kind.value, description: description.value } }))
+      sessionStorage.removeItem(storageKey); sessionStorage.removeItem(draftStorageKey)
+      // The explicit action prepares an empty form; it never sends or copies the old input.
+      name.value = ''; unit.value = 'g'; kind.value = 'raw'; description.value = ''
+      state.value = latest; draft.value = null; draftRestored.value = false; draftFailure.value = ''; saved.value = null
+      pending.value = null; processed.value = false; recovery.value = ''; failure.value = ''
+      return true
+    } catch { failure.value = '현재 자료 확인이나 원입력 보관을 완료하지 못해 새 입력을 시작하지 않았습니다. 기존 입력을 유지합니다.'; return false }
+    finally { reviewing.value = false }
+  }
+  return { name, unit, kind, description, pending, saving, reviewing, failure, saved, rejected, recovery, processed, draftRestored, draftFailure, save, editRejected, newInput }
 }

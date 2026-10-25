@@ -42,7 +42,9 @@ export function priceText(price: ResolvedPrice, unit: string): string {
   if (price.amount === null || price.quantity === null) return '가격 없음'
   return `${displayDecimal(price.amount)}원 / ${displayDecimal(price.quantity)}${unit}`
 }
-export function failureAction(status: number, code?: string): 'edit' | 'refresh' | 'blocked' | 'retry' {
+export function failureAction(status: number, code?: string, requestStatus?: string): 'edit' | 'refresh' | 'blocked' | 'retry' {
+  if (code === 'stale_read') return 'retry'
+  if (code === 'stale_generation') return requestStatus === 'not_processed' ? 'refresh' : 'blocked'
   if (status === 400) return 'edit'
   if (status === 409) return code === 'stale_state' ? 'refresh' : 'blocked'
   return 'retry'

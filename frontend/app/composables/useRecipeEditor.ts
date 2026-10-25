@@ -80,8 +80,9 @@ export function useRecipeEditor(identity: string, initial: RecipeEditorInitial, 
       completed.value += 1
       return response
     } catch (cause) {
-      recovery.value = cause instanceof ApiError ? recipeFailure(cause.status, cause.code) : 'retry'
+      recovery.value = cause instanceof ApiError ? recipeFailure(cause.status, cause.code, cause.requestStatus) : 'retry'
       failure.value = recovery.value === 'refresh' ? '다른 변경으로 이 요청은 저장하지 않았습니다. 최신 저장본을 확인하고 작성 중인 입력을 다시 검토해 주세요.' : recovery.value === 'blocked' ? '이 요청 ID에 다른 처리 이력이 있습니다. 자동으로 다시 저장하지 않습니다. 기록을 확인해 주세요.' : recovery.value === 'edit' ? (cause instanceof Error ? cause.message : '입력을 확인해 주세요.') : '완료를 확인하지 못했습니다. 요청과 입력을 유지했습니다. 같은 요청으로 재시도해 주세요.'
+      if (cause instanceof ApiError && (cause.code === 'stale_generation' || cause.code === 'stale_read')) failure.value = cause.message
       return null
     } finally { applying = false; busy.value = false }
   }

@@ -50,8 +50,10 @@ function toggleTheme() {
       <NuxtLink to="/wastes" :aria-current="route.path.startsWith('/wastes') ? 'page' : undefined">폐기 · 직원식</NuxtLink>
       <NuxtLink to="/sales" :aria-current="route.path === '/sales' || route.path.startsWith('/sales/') ? 'page' : undefined">판매 기록</NuxtLink>
       <NuxtLink to="/statistics" :aria-current="route.path === '/statistics' ? 'page' : undefined">통계·이력</NuxtLink>
+      <NuxtLink to="/restore" :aria-current="route.path === '/restore' ? 'page' : undefined">자료 복원</NuxtLink>
     </nav>
     <ConnectionBanner />
+    <RestoredStateBanner />
     <main id="main-content" tabindex="-1"><NuxtPage /></main>
     <footer class="app-footer"><span>순창한상</span><span>이 PC의 앱에서 재료를 관리합니다.</span></footer>
   </div>

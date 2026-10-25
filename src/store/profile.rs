@@ -419,6 +419,7 @@ impl Store {
                     return Err(stale());
                 }
                 if let Some(d) = &descriptor {
+                    super::restore::preserve_asset(tx, d)?;
                     if let Some(existing) = asset(tx, &d.sha256)? {
                         if existing.descriptor != *d {
                             return Err(unavailable("등록된 사진 자산 정보가 일치하지 않습니다"));
@@ -489,8 +490,17 @@ impl Store {
         {
             return Err(invalid("사진 자산 ID가 올바르지 않습니다"));
         }
-        asset(&self.connection, sha256)?
-            .map(|row| photo_assets::read_photo(&self.root, &row.descriptor).map_err(photo_error))
+        let active = asset(&self.connection, sha256)?;
+        let preserved = super::restore::preserved_asset(&self.connection, sha256)?;
+        if let Some(active) = active
+            && preserved.as_ref() != Some(&active.descriptor)
+        {
+            return Err(unavailable("활성 사진 자산과 보존 등록 정보가 다릅니다"));
+        }
+        preserved
+            .map(|descriptor| {
+                photo_assets::read_photo(&self.root, &descriptor).map_err(photo_error)
+            })
             .transpose()
     }
 }
@@ -535,8 +545,8 @@ pub(super) fn verify_copy_result(
     Ok(())
 }
 pub(super) fn verify_assets(connection: &Connection, root: &Path) -> Result<(), StoreError> {
-    for row in snapshot_rows(connection)?.assets {
-        photo_assets::verify_photo(root, &row.descriptor).map_err(photo_error)?;
+    for descriptor in super::restore::preserved_assets(connection)? {
+        photo_assets::verify_photo(root, &descriptor).map_err(photo_error)?;
     }
     Ok(())
 }

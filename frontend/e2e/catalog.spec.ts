@@ -106,7 +106,8 @@ test('catalog zero prices, independent IDs, versions and archive survive normal 
   await page.getByLabel('조회 범위').selectOption('all')
   await expect(page.locator('.material-list li')).toHaveCount(2)
   await visit(page, '/overview')
-  await expect(page.locator('.overview-count')).toHaveText('1개')
+  await expect(page.getByText('전체 품목(보관 포함)', { exact: true })).toBeVisible()
+  await expect(page.locator('.overview-count')).toHaveText('2개')
 
   await page.goto('about:blank')
   let timer: ReturnType<typeof setTimeout> | undefined

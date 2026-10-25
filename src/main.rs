@@ -5,6 +5,7 @@ use sunchang_hansang::{
     server::{AppState, router},
     store::Store,
 };
+mod browser_listener;
 
 fn data_directory(executable: &Path) -> Result<PathBuf> {
     Ok(executable
@@ -35,7 +36,7 @@ async fn run() -> Result<()> {
     let root = data_directory(&std::env::current_exe().context("실행파일 경로 확인 실패")?)?;
     let store = Store::open(&root)
         .context("db/를 열지 못했습니다. 폴더 쓰기 권한과 이미 실행 중인 앱을 확인해 주세요.")?;
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+    let listener = browser_listener::bind()
         .await
         .context("로컬 서버 시작 실패")?;
     let address = listener.local_addr()?;

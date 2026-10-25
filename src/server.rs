@@ -17,6 +17,10 @@ use crate::{
     receipt::ReceiptFilter,
     recipe::{CopyRecipe, CreateRecipe, RecipeFilter, ReviseRecipe},
     recipe_connections::RecipeConnectionsError,
+    restore::{ConfirmRestore, PreviewRestore, RestoreTargetQuery},
+    restore_files::{
+        MAX_RESTORE_UPLOAD_BYTES, RestoreFileError, reject_duplicate_json_keys, restore_upload,
+    },
     sale::SaleFilter,
     statistics::{StatisticsError, StatisticsQuery},
     stocktake::StocktakeFilter,
@@ -51,6 +55,7 @@ use tokio::sync::{Notify, Semaphore, watch};
 
 const MAX_PROFILE_BODY_BYTES: usize = 11 * 1024 * 1024;
 const PROFILE_BODY_TIMEOUT: Duration = Duration::from_secs(60);
+const RESTORE_BODY_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[derive(Clone)]
 pub struct AppState(Arc<Inner>);
@@ -67,6 +72,7 @@ struct Inner {
     sockets: AtomicUsize,
     sockets_done: Notify,
     photo_uploads: Arc<Semaphore>,
+    restore_uploads: Arc<Semaphore>,
 }
 impl AppState {
     pub fn new(store: Store, host: String, token: String, policy: Policy) -> Self {
@@ -85,6 +91,7 @@ impl AppState {
             sockets: AtomicUsize::new(0),
             sockets_done: Notify::new(),
             photo_uploads: Arc::new(Semaphore::new(1)),
+            restore_uploads: Arc::new(Semaphore::new(1)),
         }))
     }
     fn now(&self) -> u64 {
@@ -128,7 +135,7 @@ impl AppState {
         let state = self.clone();
         tokio::task::spawn_blocking(move || {
             let mut store = state.0.store.lock().map_err(|_| {
-                ApiError(
+                ApiError::new(
                     StatusCode::SERVICE_UNAVAILABLE,
                     "저장소를 다시 열어 주세요.".into(),
                     "unavailable",
@@ -137,7 +144,7 @@ impl AppState {
             // This check under the writer mutex rejects queued work on shutdown.
             // Once past it, the complete DB + journal operation is allowed to finish.
             if state.0.stopping.load(Ordering::SeqCst) {
-                return Err(ApiError(
+                return Err(ApiError::new(
                     StatusCode::SERVICE_UNAVAILABLE,
                     "앱을 종료하는 중입니다.".into(),
                     "unavailable",
@@ -147,7 +154,7 @@ impl AppState {
         })
         .await
         .map_err(|_| {
-            ApiError(
+            ApiError::new(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "저장 작업을 마치지 못했습니다.".into(),
                 "internal",
@@ -157,21 +164,38 @@ impl AppState {
 }
 
 #[derive(Debug)]
-pub struct ApiError(StatusCode, String, &'static str);
+pub struct ApiError(StatusCode, Value);
+impl ApiError {
+    fn new(status: StatusCode, message: String, code: &'static str) -> Self {
+        Self(status, json!({"error": message, "code": code}))
+    }
+}
 impl From<StoreError> for ApiError {
     fn from(e: StoreError) -> Self {
-        let (status, code) = match &e {
-            StoreError::Validation(_) => (StatusCode::BAD_REQUEST, "validation"),
-            StoreError::Conflict(_) => (StatusCode::CONFLICT, "request_conflict"),
-            StoreError::StaleState(_) => (StatusCode::CONFLICT, "stale_state"),
-            StoreError::Unavailable(_) => (StatusCode::SERVICE_UNAVAILABLE, "unavailable"),
-        };
-        Self(status, e.to_string(), code)
+        let message = e.to_string();
+        match e {
+            StoreError::StaleGeneration {
+                request_status,
+                state,
+            } => Self(
+                StatusCode::CONFLICT,
+                json!({
+                    "error": message,
+                    "code": "stale_generation", "request_status": request_status, "state": state,
+                }),
+            ),
+            StoreError::Validation(_) => Self::new(StatusCode::BAD_REQUEST, message, "validation"),
+            StoreError::Conflict(_) => Self::new(StatusCode::CONFLICT, message, "request_conflict"),
+            StoreError::StaleState(_) => Self::new(StatusCode::CONFLICT, message, "stale_state"),
+            StoreError::Unavailable(_) => {
+                Self::new(StatusCode::SERVICE_UNAVAILABLE, message, "unavailable")
+            }
+        }
     }
 }
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        (self.0, Json(json!({"error": self.1, "code": self.2}))).into_response()
+        (self.0, Json(self.1)).into_response()
     }
 }
 fn error(status: StatusCode, message: &str) -> Response {
@@ -184,7 +208,7 @@ fn error(status: StatusCode, message: &str) -> Response {
         StatusCode::SERVICE_UNAVAILABLE => "unavailable",
         _ => "internal",
     };
-    ApiError(status, message.into(), code).into_response()
+    ApiError::new(status, message.into(), code).into_response()
 }
 
 fn json_input<T>(input: Result<Json<T>, JsonRejection>) -> Result<T, ApiError> {
@@ -194,7 +218,7 @@ fn json_input<T>(input: Result<Json<T>, JsonRejection>) -> Result<T, ApiError> {
         } else {
             StatusCode::BAD_REQUEST
         };
-        ApiError(status, error.body_text(), "validation")
+        ApiError::new(status, error.body_text(), "validation")
     })
 }
 
@@ -206,6 +230,13 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/api/session", post(session))
         .route("/api/state", get(catalog_state))
+        .route("/api/restore-targets", get(restore_targets))
+        .route(
+            "/api/restore-targets/import",
+            post(restore_import).layer(DefaultBodyLimit::max(MAX_RESTORE_UPLOAD_BYTES)),
+        )
+        .route("/api/restore/preview", post(restore_preview))
+        .route("/api/restores", post(restore_confirm))
         .route("/api/statistics", get(statistics))
         .route("/api/overview", get(operations_overview))
         .route("/api/overview/list", get(overview_list))
@@ -390,7 +421,7 @@ const MAX_STATISTICS_QUERY_BYTES: usize = 4096;
 fn read_query(uri: &Uri) -> Result<&str, ApiError> {
     let query = uri.query().unwrap_or_default();
     if query.len() > MAX_STATISTICS_QUERY_BYTES {
-        return Err(ApiError(
+        return Err(ApiError::new(
             StatusCode::URI_TOO_LONG,
             "조회 조건이 4096바이트를 넘었습니다.".into(),
             "validation",
@@ -406,7 +437,7 @@ fn read_query(uri: &Uri) -> Result<&str, ApiError> {
             let a = bytes.get(at + 1).and_then(|b| char::from(*b).to_digit(16));
             let b = bytes.get(at + 2).and_then(|b| char::from(*b).to_digit(16));
             let (Some(a), Some(b)) = (a, b) else {
-                return Err(ApiError(
+                return Err(ApiError::new(
                     StatusCode::BAD_REQUEST,
                     "조회 조건의 인코딩이 올바르지 않습니다.".into(),
                     "validation",
@@ -420,7 +451,7 @@ fn read_query(uri: &Uri) -> Result<&str, ApiError> {
         }
     }
     if std::str::from_utf8(&decoded).is_err() {
-        return Err(ApiError(
+        return Err(ApiError::new(
             StatusCode::BAD_REQUEST,
             "조회 조건은 UTF-8이어야 합니다.".into(),
             "validation",
@@ -428,23 +459,252 @@ fn read_query(uri: &Uri) -> Result<&str, ApiError> {
     }
     Ok(query)
 }
+fn restore_file_error(error: RestoreFileError) -> ApiError {
+    match error {
+        RestoreFileError::Validation(message) => {
+            ApiError::new(StatusCode::BAD_REQUEST, message, "validation")
+        }
+        RestoreFileError::Unavailable(_) => ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "복원 자료를 안전하게 읽지 못했습니다. 저장소를 확인해 주세요.".into(),
+            "unavailable",
+        ),
+    }
+}
+fn restore_store_error(error: StoreError) -> ApiError {
+    match error {
+        StoreError::Unavailable(_) => ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "복원 자료를 처리하지 못했습니다. 저장소를 확인한 뒤 같은 요청으로 결과를 확인해 주세요.".into(),
+            "unavailable",
+        ),
+        other => ApiError::from(other),
+    }
+}
+fn restore_headers(headers: &HeaderMap) -> Result<(), ApiError> {
+    let content_type = headers
+        .get("content-type")
+        .and_then(|value| value.to_str().ok());
+    let valid_type = content_type.is_some_and(|value| {
+        let mut parts = value.split(';');
+        parts
+            .next()
+            .is_some_and(|mime| mime.trim().eq_ignore_ascii_case("application/json"))
+            && parts.all(|part| part.trim().eq_ignore_ascii_case("charset=utf-8"))
+    });
+    if headers.get_all("content-type").iter().count() != 1
+        || !valid_type
+        || headers.contains_key("content-encoding")
+    {
+        return Err(ApiError::new(
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "압축하지 않은 application/json 단일 본문을 보내 주세요.".into(),
+            "validation",
+        ));
+    }
+    Ok(())
+}
+async fn restore_body(request: Request<Body>, limit: usize) -> Result<Vec<u8>, ApiError> {
+    restore_headers(request.headers())?;
+    let declared_length = request
+        .headers()
+        .get("content-length")
+        .map(|value| {
+            value
+                .to_str()
+                .ok()
+                .and_then(|value| value.parse::<u64>().ok())
+                .ok_or_else(|| {
+                    ApiError::new(
+                        StatusCode::BAD_REQUEST,
+                        "본문 길이 정보가 올바르지 않습니다.".into(),
+                        "validation",
+                    )
+                })
+        })
+        .transpose()?;
+    if declared_length.is_some_and(|length| length > limit as u64) {
+        return Err(ApiError::new(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "복원 요청 본문 크기가 한도를 넘었습니다.".into(),
+            "validation",
+        ));
+    }
+    let mut stream = request.into_body().into_data_stream();
+    let mut bytes = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|_| {
+            ApiError::new(
+                StatusCode::BAD_REQUEST,
+                "복원 요청 본문을 끝까지 읽지 못했습니다.".into(),
+                "validation",
+            )
+        })?;
+        if bytes
+            .len()
+            .checked_add(chunk.len())
+            .is_none_or(|size| size > limit)
+        {
+            return Err(ApiError::new(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "복원 요청 본문 크기가 한도를 넘었습니다.".into(),
+                "validation",
+            ));
+        }
+        bytes.try_reserve(chunk.len()).map_err(|_| {
+            ApiError::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "복원 요청을 읽을 메모리를 확보하지 못했습니다.".into(),
+                "unavailable",
+            )
+        })?;
+        bytes.extend_from_slice(&chunk);
+    }
+    if declared_length.is_some_and(|length| length != bytes.len() as u64) {
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "복원 요청 본문 길이가 전송 정보와 다릅니다.".into(),
+            "validation",
+        ));
+    }
+    Ok(bytes)
+}
+async fn small_restore_json<T: serde::de::DeserializeOwned>(
+    state: &AppState,
+    request: Request<Body>,
+) -> Result<T, ApiError> {
+    let bytes = tokio::select! {
+        _ = state.cancelled() => return Err(ApiError::new(StatusCode::SERVICE_UNAVAILABLE, "앱을 종료하는 중입니다.".into(), "unavailable")),
+        result = tokio::time::timeout(RESTORE_BODY_TIMEOUT, restore_body(request, 16 * 1024)) => {
+            result.map_err(|_| ApiError::new(StatusCode::REQUEST_TIMEOUT, "복원 요청 전송 시간이 초과되었습니다.".into(), "unavailable"))??
+        }
+    };
+    reject_duplicate_json_keys(&bytes).map_err(restore_file_error)?;
+    serde_json::from_slice(&bytes).map_err(|_| {
+        ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "복원 요청 입력 형식을 확인해 주세요.".into(),
+            "validation",
+        )
+    })
+}
+async fn restore_targets(
+    State(state): State<AppState>,
+    uri: Uri,
+) -> Result<impl IntoResponse, ApiError> {
+    let raw = read_query(&uri)?;
+    if !raw.is_empty()
+        && raw
+            .split('&')
+            .any(|part| part.is_empty() || !part.contains('=') || part.ends_with('='))
+    {
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "복원 목록의 빈 조회 조건은 지원하지 않습니다.".into(),
+            "validation",
+        ));
+    }
+    let Query(query) = Query::<RestoreTargetQuery>::try_from_uri(&uri).map_err(|_| {
+        ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "복원 목록 종류와 다음 위치를 각각 한 번 지정하세요.".into(),
+            "validation",
+        )
+    })?;
+    query
+        .validate()
+        .map_err(|message| ApiError::new(StatusCode::BAD_REQUEST, message, "validation"))?;
+    Ok(Json(
+        state
+            .with_store(move |store| Ok(store.restore_targets(query)))
+            .await?
+            .map_err(restore_store_error)?,
+    ))
+}
+async fn restore_import(
+    State(state): State<AppState>,
+    request: Request<Body>,
+) -> Result<impl IntoResponse, ApiError> {
+    let permit = state
+        .0
+        .restore_uploads
+        .clone()
+        .try_acquire_owned()
+        .map_err(|_| {
+            ApiError::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "다른 복원 파일 검증을 마친 뒤 다시 시도해 주세요.".into(),
+                "unavailable",
+            )
+        })?;
+    let bytes = tokio::select! {
+        _ = state.cancelled() => return Err(ApiError::new(StatusCode::SERVICE_UNAVAILABLE, "앱을 종료하는 중입니다.".into(), "unavailable")),
+        result = tokio::time::timeout(RESTORE_BODY_TIMEOUT, restore_body(request, MAX_RESTORE_UPLOAD_BYTES)) => {
+            result.map_err(|_| ApiError::new(StatusCode::REQUEST_TIMEOUT, "복원 파일 전송 시간이 초과되었습니다.".into(), "unavailable"))??
+        }
+    };
+    let upload = restore_upload(bytes).map_err(restore_file_error)?;
+    let target = state
+        .with_store(move |store| {
+            // Retain admission while accepted blocking validation/publication finishes,
+            // even when the HTTP client stops waiting for its response.
+            let _permit = permit;
+            Ok(store.restore_import(upload))
+        })
+        .await?
+        .map_err(restore_store_error)?;
+    Ok((StatusCode::CREATED, Json(target)))
+}
+async fn restore_preview(
+    State(state): State<AppState>,
+    request: Request<Body>,
+) -> Result<impl IntoResponse, ApiError> {
+    let input: PreviewRestore = small_restore_json(&state, request).await?;
+    input
+        .validate()
+        .map_err(|message| ApiError::new(StatusCode::BAD_REQUEST, message, "validation"))?;
+    Ok(Json(
+        state
+            .with_store(move |store| Ok(store.restore_preview(input)))
+            .await?
+            .map_err(restore_store_error)?,
+    ))
+}
+async fn restore_confirm(
+    State(state): State<AppState>,
+    request: Request<Body>,
+) -> Result<impl IntoResponse, ApiError> {
+    let input: ConfirmRestore = small_restore_json(&state, request).await?;
+    input
+        .target()
+        .map_err(|message| ApiError::new(StatusCode::BAD_REQUEST, message, "validation"))?;
+    Ok((
+        StatusCode::CREATED,
+        Json(
+            state
+                .with_store(move |store| Ok(store.restore(input)))
+                .await?
+                .map_err(restore_store_error)?,
+        ),
+    ))
+}
 fn statistics_error(error: StatisticsError) -> ApiError {
     let (status, code) = match &error {
         StatisticsError::Validation(_) => (StatusCode::BAD_REQUEST, "validation"),
         StatisticsError::ReportTooLarge => (StatusCode::BAD_REQUEST, "report_too_large"),
         StatisticsError::Unavailable(_) => (StatusCode::SERVICE_UNAVAILABLE, "unavailable"),
     };
-    ApiError(status, error.to_string(), code)
+    ApiError::new(status, error.to_string(), code)
 }
 fn overview_error(error: OverviewError) -> ApiError {
     match error {
         OverviewError::Validation(message) => {
-            ApiError(StatusCode::BAD_REQUEST, message, "validation")
+            ApiError::new(StatusCode::BAD_REQUEST, message, "validation")
         }
         OverviewError::StaleState(message) => {
-            ApiError(StatusCode::CONFLICT, message, "stale_state")
+            ApiError::new(StatusCode::CONFLICT, message, "stale_state")
         }
-        OverviewError::Unavailable(_) => ApiError(
+        OverviewError::Unavailable(_) => ApiError::new(
             StatusCode::SERVICE_UNAVAILABLE,
             "운영 개요를 읽지 못했습니다. 저장소를 다시 확인해 주세요.".into(),
             "unavailable",
@@ -456,7 +716,7 @@ async fn operations_overview(
     uri: Uri,
 ) -> Result<impl IntoResponse, ApiError> {
     if !read_query(&uri)?.is_empty() {
-        return Err(ApiError(
+        return Err(ApiError::new(
             StatusCode::BAD_REQUEST,
             "운영 개요에는 조회 조건을 지정하지 않습니다.".into(),
             "validation",
@@ -475,7 +735,7 @@ async fn overview_list(
 ) -> Result<impl IntoResponse, ApiError> {
     read_query(&uri)?;
     let Query(query) = Query::<OverviewListQuery>::try_from_uri(&uri).map_err(|_| {
-        ApiError(
+        ApiError::new(
             StatusCode::BAD_REQUEST,
             "목록 종류·시작 위치·조회 epoch와 revision을 각각 한 번 지정하세요.".into(),
             "validation",
@@ -494,7 +754,7 @@ async fn statistics(
 ) -> Result<impl IntoResponse, ApiError> {
     read_query(&uri)?;
     let Query(query) = Query::<StatisticsQuery>::try_from_uri(&uri).map_err(|_| {
-        ApiError(
+        ApiError::new(
             StatusCode::BAD_REQUEST,
             "시작과 끝 시각을 각각 한 번 지정하세요. 다른 조회 조건은 지원하지 않습니다.".into(),
             "validation",
@@ -512,7 +772,7 @@ fn connections_error(error: RecipeConnectionsError) -> ApiError {
         RecipeConnectionsError::TooLarge => (StatusCode::BAD_REQUEST, "connections_too_large"),
         RecipeConnectionsError::Unavailable(_) => (StatusCode::SERVICE_UNAVAILABLE, "unavailable"),
     };
-    ApiError(status, error.to_string(), code)
+    ApiError::new(status, error.to_string(), code)
 }
 async fn recipe_connections(
     State(state): State<AppState>,
@@ -520,7 +780,7 @@ async fn recipe_connections(
     uri: Uri,
 ) -> Result<impl IntoResponse, ApiError> {
     if !read_query(&uri)?.is_empty() {
-        return Err(ApiError(
+        return Err(ApiError::new(
             StatusCode::BAD_REQUEST,
             "현재 레시피 연결만 조회하며 추가 조건은 지원하지 않습니다.".into(),
             "validation",
@@ -531,7 +791,7 @@ async fn recipe_connections(
         .await?
         .map_err(connections_error)?
         .ok_or_else(|| {
-            ApiError(
+            ApiError::new(
                 StatusCode::NOT_FOUND,
                 "현재 레시피가 없습니다.".into(),
                 "not_found",
@@ -541,7 +801,7 @@ async fn recipe_connections(
 }
 
 fn profile_missing() -> ApiError {
-    ApiError(
+    ApiError::new(
         StatusCode::NOT_FOUND,
         "품목 또는 사진·구입처 버전을 찾을 수 없습니다.".into(),
         "not_found",
@@ -583,10 +843,10 @@ async fn profile_version(
 fn photo_error(error: PhotoAssetError) -> ApiError {
     match error {
         PhotoAssetError::Validation(message) => {
-            ApiError(StatusCode::BAD_REQUEST, message, "validation")
+            ApiError::new(StatusCode::BAD_REQUEST, message, "validation")
         }
         PhotoAssetError::Unavailable(message) => {
-            ApiError(StatusCode::SERVICE_UNAVAILABLE, message, "unavailable")
+            ApiError::new(StatusCode::SERVICE_UNAVAILABLE, message, "unavailable")
         }
     }
 }
@@ -596,14 +856,14 @@ fn multipart_error(error: MultipartError) -> ApiError {
     } else {
         StatusCode::BAD_REQUEST
     };
-    ApiError(
+    ApiError::new(
         status,
         "사진 전송 본문 또는 크기를 확인해 주세요.".into(),
         "validation",
     )
 }
 fn profile_invalid(message: &str) -> ApiError {
-    ApiError(StatusCode::BAD_REQUEST, message.into(), "validation")
+    ApiError::new(StatusCode::BAD_REQUEST, message.into(), "validation")
 }
 async fn profile_body(
     request: Request<Body>,
@@ -622,14 +882,14 @@ async fn profile_body(
             .checked_add(chunk.len())
             .is_none_or(|size| size > MAX_PROFILE_BODY_BYTES)
         {
-            return Err(ApiError(
+            return Err(ApiError::new(
                 StatusCode::PAYLOAD_TOO_LARGE,
                 "전체 사진 전송 크기가 11MiB를 넘었습니다.".into(),
                 "validation",
             ));
         }
         envelope.try_reserve(chunk.len()).map_err(|_| {
-            ApiError(
+            ApiError::new(
                 StatusCode::SERVICE_UNAVAILABLE,
                 "사진 전송을 위한 메모리를 확보하지 못했습니다.".into(),
                 "unavailable",
@@ -662,14 +922,14 @@ async fn profile_body(
                 .checked_add(chunk.len())
                 .is_none_or(|size| size > limit)
             {
-                return Err(ApiError(
+                return Err(ApiError::new(
                     StatusCode::PAYLOAD_TOO_LARGE,
                     "사진 또는 설명 전송 크기가 한도를 넘었습니다.".into(),
                     "validation",
                 ));
             }
             bytes.try_reserve(chunk.len()).map_err(|_| {
-                ApiError(
+                ApiError::new(
                     StatusCode::SERVICE_UNAVAILABLE,
                     "사진 전송을 위한 메모리를 확보하지 못했습니다.".into(),
                     "unavailable",
@@ -711,16 +971,16 @@ async fn profile_revise(
         .clone()
         .try_acquire_owned()
         .map_err(|_| {
-            ApiError(
+            ApiError::new(
                 StatusCode::SERVICE_UNAVAILABLE,
                 "다른 사진 저장을 마친 뒤 같은 요청을 다시 시도해 주세요.".into(),
                 "unavailable",
             )
         })?;
     let (input, photo) = tokio::select! {
-        _ = state.cancelled() => return Err(ApiError(StatusCode::SERVICE_UNAVAILABLE, "앱을 종료하는 중입니다.".into(), "unavailable")),
+        _ = state.cancelled() => return Err(ApiError::new(StatusCode::SERVICE_UNAVAILABLE, "앱을 종료하는 중입니다.".into(), "unavailable")),
         result = tokio::time::timeout(PROFILE_BODY_TIMEOUT, profile_body(request, &state)) => {
-            result.map_err(|_| ApiError(StatusCode::REQUEST_TIMEOUT, "사진 전송 시간이 초과되었습니다. 같은 요청을 다시 시도해 주세요.".into(), "unavailable"))??
+            result.map_err(|_| ApiError::new(StatusCode::REQUEST_TIMEOUT, "사진 전송 시간이 초과되었습니다. 같은 요청을 다시 시도해 주세요.".into(), "unavailable"))??
         }
     };
     let detail = state
@@ -739,7 +999,7 @@ async fn photo_asset(
         .with_store(move |store| store.photo_asset_bytes(&sha256))
         .await?
         .ok_or_else(|| {
-            ApiError(
+            ApiError::new(
                 StatusCode::NOT_FOUND,
                 "등록된 사진을 찾을 수 없습니다.".into(),
                 "not_found",
@@ -766,7 +1026,7 @@ async fn list(
     input: Result<Query<CatalogFilter>, QueryRejection>,
 ) -> Result<impl IntoResponse, ApiError> {
     let Query(filter) = input
-        .map_err(|error| ApiError(StatusCode::BAD_REQUEST, error.body_text(), "validation"))?;
+        .map_err(|error| ApiError::new(StatusCode::BAD_REQUEST, error.body_text(), "validation"))?;
     Ok(Json(
         state.with_store(move |s| s.catalog_list(filter)).await?,
     ))
@@ -779,7 +1039,7 @@ async fn detail(
         .with_store(move |s| s.catalog_detail(&id))
         .await?
         .ok_or_else(|| {
-            ApiError(
+            ApiError::new(
                 StatusCode::NOT_FOUND,
                 "재료를 찾을 수 없습니다.".into(),
                 "not_found",
@@ -793,7 +1053,7 @@ async fn create(
 ) -> Result<Response, ApiError> {
     let input = json_input(input)?;
     let object = input.as_object().ok_or_else(|| {
-        ApiError(
+        ApiError::new(
             StatusCode::BAD_REQUEST,
             "재료 입력은 JSON 객체여야 합니다.".into(),
             "validation",
@@ -805,8 +1065,9 @@ async fn create(
         .keys()
         .all(|key| matches!(key.as_str(), "request_id" | "name" | "unit"))
     {
-        let input: CreateMaterial = serde_json::from_value(input)
-            .map_err(|error| ApiError(StatusCode::BAD_REQUEST, error.to_string(), "validation"))?;
+        let input: CreateMaterial = serde_json::from_value(input).map_err(|error| {
+            ApiError::new(StatusCode::BAD_REQUEST, error.to_string(), "validation")
+        })?;
         return Ok((
             StatusCode::CREATED,
             Json(state.with_store(move |s| s.create(input)).await?),
@@ -814,7 +1075,7 @@ async fn create(
             .into_response());
     }
     let input: CreateCatalogMaterial = serde_json::from_value(input)
-        .map_err(|error| ApiError(StatusCode::BAD_REQUEST, error.to_string(), "validation"))?;
+        .map_err(|error| ApiError::new(StatusCode::BAD_REQUEST, error.to_string(), "validation"))?;
     Ok((
         StatusCode::CREATED,
         Json(state.with_store(move |s| s.catalog_create(input)).await?),
@@ -872,7 +1133,7 @@ async fn business_list(
     input: Result<Query<BusinessFilter>, QueryRejection>,
 ) -> Result<impl IntoResponse, ApiError> {
     let Query(filter) = input
-        .map_err(|error| ApiError(StatusCode::BAD_REQUEST, error.body_text(), "validation"))?;
+        .map_err(|error| ApiError::new(StatusCode::BAD_REQUEST, error.body_text(), "validation"))?;
     Ok(Json(
         state.with_store(move |s| s.business_list(filter)).await?,
     ))
@@ -886,7 +1147,7 @@ async fn business_detail(
         .with_store(move |s| s.business_detail(&id))
         .await?
         .ok_or_else(|| {
-            ApiError(
+            ApiError::new(
                 StatusCode::NOT_FOUND,
                 "업무 기록을 찾을 수 없습니다.".into(),
                 "not_found",
@@ -975,7 +1236,7 @@ async fn correction_seed(
         .with_store(move |s| s.correction_seed(&id))
         .await?
         .ok_or_else(|| {
-            ApiError(
+            ApiError::new(
                 StatusCode::NOT_FOUND,
                 "정정할 원기록을 찾을 수 없습니다.".into(),
                 "not_found",
@@ -992,7 +1253,7 @@ async fn correction_detail(
         .with_store(move |s| s.correction_detail(&id))
         .await?
         .ok_or_else(|| {
-            ApiError(
+            ApiError::new(
                 StatusCode::NOT_FOUND,
                 "정정 내역을 찾을 수 없습니다.".into(),
                 "not_found",
@@ -1007,7 +1268,7 @@ async fn correction_draft_create(
 ) -> Result<impl IntoResponse, ApiError> {
     let input = json_input(input)?;
     if input.payload.kind() != BusinessKind::Correction {
-        return Err(ApiError(
+        return Err(ApiError::new(
             StatusCode::BAD_REQUEST,
             "이 경로에는 정정 초안만 저장할 수 있습니다.".into(),
             "validation",
@@ -1026,7 +1287,7 @@ async fn correction_draft_revise(
 ) -> Result<impl IntoResponse, ApiError> {
     let input = json_input(input)?;
     if input.payload.kind() != BusinessKind::Correction {
-        return Err(ApiError(
+        return Err(ApiError::new(
             StatusCode::BAD_REQUEST,
             "이 경로에는 정정 초안만 저장할 수 있습니다.".into(),
             "validation",
@@ -1048,7 +1309,7 @@ async fn production_draft_create(
 ) -> Result<impl IntoResponse, ApiError> {
     let input = json_input(input)?;
     if input.payload.kind() != BusinessKind::Production {
-        return Err(ApiError(
+        return Err(ApiError::new(
             StatusCode::BAD_REQUEST,
             "이 경로에는 생산 초안만 저장할 수 있습니다.".into(),
             "validation",
@@ -1067,7 +1328,7 @@ async fn production_draft_revise(
 ) -> Result<impl IntoResponse, ApiError> {
     let input = json_input(input)?;
     if input.payload.kind() != BusinessKind::Production {
-        return Err(ApiError(
+        return Err(ApiError::new(
             StatusCode::BAD_REQUEST,
             "이 경로에는 생산 초안만 저장할 수 있습니다.".into(),
             "validation",
@@ -1088,7 +1349,7 @@ async fn production_list(
     input: Result<Query<ProductionFilter>, QueryRejection>,
 ) -> Result<impl IntoResponse, ApiError> {
     let Query(filter) = input
-        .map_err(|error| ApiError(StatusCode::BAD_REQUEST, error.body_text(), "validation"))?;
+        .map_err(|error| ApiError::new(StatusCode::BAD_REQUEST, error.body_text(), "validation"))?;
     Ok(Json(
         state.with_store(move |s| s.production_list(filter)).await?,
     ))
@@ -1102,7 +1363,7 @@ async fn production_detail(
         .with_store(move |s| s.production_detail(&id))
         .await?
         .ok_or_else(|| {
-            ApiError(
+            ApiError::new(
                 StatusCode::NOT_FOUND,
                 "생산 내역을 찾을 수 없습니다.".into(),
                 "not_found",
@@ -1116,7 +1377,7 @@ async fn sale_list(
     input: Result<Query<SaleFilter>, QueryRejection>,
 ) -> Result<impl IntoResponse, ApiError> {
     let Query(filter) = input
-        .map_err(|error| ApiError(StatusCode::BAD_REQUEST, error.body_text(), "validation"))?;
+        .map_err(|error| ApiError::new(StatusCode::BAD_REQUEST, error.body_text(), "validation"))?;
     Ok(Json(state.with_store(move |s| s.sale_list(filter)).await?))
 }
 
@@ -1126,7 +1387,7 @@ async fn stocktake_draft_create(
 ) -> Result<impl IntoResponse, ApiError> {
     let input = json_input(input)?;
     if input.payload.kind() != BusinessKind::Stocktake {
-        return Err(ApiError(
+        return Err(ApiError::new(
             StatusCode::BAD_REQUEST,
             "이 경로에는 실사 초안만 저장할 수 있습니다.".into(),
             "validation",
@@ -1145,7 +1406,7 @@ async fn stocktake_draft_revise(
 ) -> Result<impl IntoResponse, ApiError> {
     let input = json_input(input)?;
     if input.payload.kind() != BusinessKind::Stocktake {
-        return Err(ApiError(
+        return Err(ApiError::new(
             StatusCode::BAD_REQUEST,
             "이 경로에는 실사 초안만 저장할 수 있습니다.".into(),
             "validation",
@@ -1166,7 +1427,7 @@ async fn stocktake_list(
     input: Result<Query<StocktakeFilter>, QueryRejection>,
 ) -> Result<impl IntoResponse, ApiError> {
     let Query(filter) = input
-        .map_err(|error| ApiError(StatusCode::BAD_REQUEST, error.body_text(), "validation"))?;
+        .map_err(|error| ApiError::new(StatusCode::BAD_REQUEST, error.body_text(), "validation"))?;
     Ok(Json(
         state.with_store(move |s| s.stocktake_list(filter)).await?,
     ))
@@ -1180,7 +1441,7 @@ async fn stocktake_detail(
         .with_store(move |s| s.stocktake_detail(&id))
         .await?
         .ok_or_else(|| {
-            ApiError(
+            ApiError::new(
                 StatusCode::NOT_FOUND,
                 "실사 내역을 찾을 수 없습니다.".into(),
                 "not_found",
@@ -1194,7 +1455,7 @@ async fn waste_list(
     input: Result<Query<WasteFilter>, QueryRejection>,
 ) -> Result<impl IntoResponse, ApiError> {
     let Query(filter) = input
-        .map_err(|error| ApiError(StatusCode::BAD_REQUEST, error.body_text(), "validation"))?;
+        .map_err(|error| ApiError::new(StatusCode::BAD_REQUEST, error.body_text(), "validation"))?;
     Ok(Json(state.with_store(move |s| s.waste_list(filter)).await?))
 }
 
@@ -1203,7 +1464,7 @@ async fn purchase_return_list(
     input: Result<Query<PurchaseReturnFilter>, QueryRejection>,
 ) -> Result<impl IntoResponse, ApiError> {
     let Query(filter) = input
-        .map_err(|error| ApiError(StatusCode::BAD_REQUEST, error.body_text(), "validation"))?;
+        .map_err(|error| ApiError::new(StatusCode::BAD_REQUEST, error.body_text(), "validation"))?;
     Ok(Json(
         state
             .with_store(move |s| s.purchase_return_list(filter))
@@ -1218,7 +1479,7 @@ async fn purchase_return_detail(
         .with_store(move |s| s.purchase_return_detail(&id))
         .await?
         .ok_or_else(|| {
-            ApiError(
+            ApiError::new(
                 StatusCode::NOT_FOUND,
                 "반품 내역을 찾을 수 없습니다.".into(),
                 "not_found",
@@ -1234,7 +1495,7 @@ async fn purchase_return_source(
         .with_store(move |s| s.purchase_return_source(&id))
         .await?
         .ok_or_else(|| {
-            ApiError(
+            ApiError::new(
                 StatusCode::NOT_FOUND,
                 "원입고 내역을 찾을 수 없습니다.".into(),
                 "not_found",
@@ -1251,7 +1512,7 @@ async fn waste_detail(
         .with_store(move |s| s.waste_detail(&id))
         .await?
         .ok_or_else(|| {
-            ApiError(
+            ApiError::new(
                 StatusCode::NOT_FOUND,
                 "폐기 내역을 찾을 수 없습니다.".into(),
                 "not_found",
@@ -1268,7 +1529,7 @@ async fn sale_detail(
         .with_store(move |s| s.sale_detail(&id))
         .await?
         .ok_or_else(|| {
-            ApiError(
+            ApiError::new(
                 StatusCode::NOT_FOUND,
                 "판매 내역을 찾을 수 없습니다.".into(),
                 "not_found",
@@ -1282,7 +1543,7 @@ async fn order_list(
     input: Result<Query<OrderFilter>, QueryRejection>,
 ) -> Result<impl IntoResponse, ApiError> {
     let Query(filter) = input
-        .map_err(|error| ApiError(StatusCode::BAD_REQUEST, error.body_text(), "validation"))?;
+        .map_err(|error| ApiError::new(StatusCode::BAD_REQUEST, error.body_text(), "validation"))?;
     Ok(Json(state.with_store(move |s| s.order_list(filter)).await?))
 }
 
@@ -1294,7 +1555,7 @@ async fn order_detail(
         .with_store(move |s| s.order_detail(&id))
         .await?
         .ok_or_else(|| {
-            ApiError(
+            ApiError::new(
                 StatusCode::NOT_FOUND,
                 "주문 내역을 찾을 수 없습니다.".into(),
                 "not_found",
@@ -1308,7 +1569,7 @@ async fn receipt_list(
     input: Result<Query<ReceiptFilter>, QueryRejection>,
 ) -> Result<impl IntoResponse, ApiError> {
     let Query(filter) = input
-        .map_err(|error| ApiError(StatusCode::BAD_REQUEST, error.body_text(), "validation"))?;
+        .map_err(|error| ApiError::new(StatusCode::BAD_REQUEST, error.body_text(), "validation"))?;
     Ok(Json(
         state.with_store(move |s| s.receipt_list(filter)).await?,
     ))
@@ -1322,7 +1583,7 @@ async fn receipt_detail(
         .with_store(move |s| s.receipt_detail(&id))
         .await?
         .ok_or_else(|| {
-            ApiError(
+            ApiError::new(
                 StatusCode::NOT_FOUND,
                 "입고 내역을 찾을 수 없습니다.".into(),
                 "not_found",
@@ -1350,7 +1611,7 @@ async fn holding_detail(
         .with_store(move |s| s.holding_detail(&id))
         .await?
         .ok_or_else(|| {
-            ApiError(
+            ApiError::new(
                 StatusCode::NOT_FOUND,
                 "재료를 찾을 수 없습니다.".into(),
                 "not_found",
@@ -1364,14 +1625,14 @@ async fn recipe_list(
     input: Result<Query<RecipeFilter>, QueryRejection>,
 ) -> Result<impl IntoResponse, ApiError> {
     let Query(filter) = input
-        .map_err(|error| ApiError(StatusCode::BAD_REQUEST, error.body_text(), "validation"))?;
+        .map_err(|error| ApiError::new(StatusCode::BAD_REQUEST, error.body_text(), "validation"))?;
     Ok(Json(
         state.with_store(move |s| s.recipe_list(filter)).await?,
     ))
 }
 
 fn recipe_not_found() -> ApiError {
-    ApiError(
+    ApiError::new(
         StatusCode::NOT_FOUND,
         "레시피 또는 버전을 찾을 수 없습니다.".into(),
         "not_found",
@@ -1430,7 +1691,7 @@ async fn recipe_uses(
         .with_store(move |s| s.recipe_uses(&id))
         .await?
         .ok_or_else(|| {
-            ApiError(
+            ApiError::new(
                 StatusCode::NOT_FOUND,
                 "재료를 찾을 수 없습니다.".into(),
                 "not_found",
@@ -1541,6 +1802,7 @@ async fn static_asset(_headers: HeaderMap, request: Request<Body>) -> Response {
     let spa_route = path == "/"
         || path == "/overview"
         || path == "/overview/list"
+        || path == "/restore"
         || path == "/workspace"
         || path == "/statistics"
         || path == "/materials"
@@ -1621,6 +1883,134 @@ async fn static_asset(_headers: HeaderMap, request: Request<Body>) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn accepted_restore_finishes_after_client_disconnect_and_shutdown() {
+        use crate::business::BusinessMeta;
+        let root = tempfile::tempdir().unwrap();
+        let mut store = Store::open(root.path()).unwrap();
+        let first = store
+            .create(CreateMaterial {
+                request_id: uuid::Uuid::new_v4().to_string(),
+                name: "가상 복원 원본".into(),
+                unit: "g".into(),
+            })
+            .unwrap();
+        let target = store
+            .restore_targets(RestoreTargetQuery::default())
+            .unwrap()
+            .rows
+            .remove(0);
+        store
+            .create(CreateMaterial {
+                request_id: uuid::Uuid::new_v4().to_string(),
+                name: "가상 복원 이후".into(),
+                unit: "g".into(),
+            })
+            .unwrap();
+        let before = store.catalog_state().unwrap();
+        let command = ConfirmRestore {
+            meta: BusinessMeta {
+                request_id: uuid::Uuid::new_v4().to_string(),
+                epoch: before.epoch,
+                expected_revision: before.revision,
+            },
+            target_id: target.target_id,
+            expected_sha256: target.sha256,
+        };
+        let state = AppState::new(
+            store,
+            "127.0.0.1:4321".into(),
+            "restore".into(),
+            Policy::default(),
+        );
+        let worker = state.clone();
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let (done_tx, done_rx) = tokio::sync::oneshot::channel();
+        let client = tokio::spawn(async move {
+            worker
+                .with_store(move |store| {
+                    entered_tx.send(()).unwrap();
+                    release_rx.recv().unwrap();
+                    let result = store.restore(command);
+                    done_tx.send(result.is_ok()).unwrap();
+                    result
+                })
+                .await
+        });
+        entered_rx.await.unwrap();
+        client.abort();
+        state.shutdown();
+        release_tx.send(()).unwrap();
+        assert!(done_rx.await.unwrap());
+        let restored = state.0.store.lock().unwrap().list().unwrap();
+        assert_eq!(restored.len(), 1);
+        assert_eq!(restored[0].id, first.id);
+        assert!(state.with_store(|store| store.list()).await.is_err());
+        drop(state);
+        let reopened = Store::open(root.path()).unwrap();
+        assert_eq!(reopened.list().unwrap()[0].id, first.id);
+    }
+
+    #[tokio::test]
+    async fn accepted_import_retains_admission_after_disconnect_until_publication_finishes() {
+        let root = tempfile::tempdir().unwrap();
+        let mut store = Store::open(root.path()).unwrap();
+        store
+            .create(CreateMaterial {
+                request_id: uuid::Uuid::new_v4().to_string(),
+                name: "가상 수입 원본".into(),
+                unit: "g".into(),
+            })
+            .unwrap();
+        let bytes = std::fs::read(root.path().join("snapshots/00000000000000000001.json")).unwrap();
+        let upload = restore_upload(bytes).unwrap();
+        let before = store.catalog_state().unwrap();
+        let state = AppState::new(
+            store,
+            "127.0.0.1:4321".into(),
+            "restore".into(),
+            Policy::default(),
+        );
+        let permit = state.0.restore_uploads.clone().try_acquire_owned().unwrap();
+        let worker = state.clone();
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let (done_tx, done_rx) = tokio::sync::oneshot::channel();
+        let client = tokio::spawn(async move {
+            worker
+                .with_store(move |store| {
+                    let _permit = permit;
+                    entered_tx.send(()).unwrap();
+                    release_rx.recv().unwrap();
+                    let result = store.restore_import(upload);
+                    done_tx.send(result.is_ok()).unwrap();
+                    result
+                })
+                .await
+        });
+        entered_rx.await.unwrap();
+        client.abort();
+        state.shutdown();
+        assert_eq!(state.0.restore_uploads.available_permits(), 0);
+        release_tx.send(()).unwrap();
+        assert!(done_rx.await.unwrap());
+        assert_eq!(
+            state.0.store.lock().unwrap().catalog_state().unwrap(),
+            before
+        );
+        assert_eq!(state.0.restore_uploads.available_permits(), 1);
+        drop(state);
+        let reopened = Store::open(root.path()).unwrap();
+        let targets = reopened
+            .restore_targets(RestoreTargetQuery {
+                source: crate::restore::RestoreTargetSource::Import,
+                cursor: None,
+            })
+            .unwrap();
+        assert_eq!(targets.rows.len(), 1);
+    }
+
     #[tokio::test]
     async fn accepted_photo_write_keeps_admission_after_disconnect_and_finishes_during_shutdown() {
         use image::ImageEncoder;

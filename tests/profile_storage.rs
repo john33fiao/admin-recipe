@@ -30,7 +30,7 @@ fn opening_store_provides_profile_relations_without_inventing_profile_history() 
         database
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        14
+        15
     );
     for table in [
         "photo_assets",
@@ -838,7 +838,7 @@ fn schema_thirteen_migration_preserves_every_existing_row_and_journal_and_old_re
         database
             .pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0))
             .unwrap(),
-        14
+        15
     );
     for (table, expected) in before {
         assert_eq!(rows(&database, &table), expected, "{table}");

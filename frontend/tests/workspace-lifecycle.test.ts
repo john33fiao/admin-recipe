@@ -8,12 +8,13 @@ import * as business from '../app/utils/business.ts'
 import * as helpers from '../app/utils/workspace.ts'
 import { ApiError } from '../app/utils/api.ts'
 import { failureAction } from '../app/utils/catalog.ts'
+import { currentAppState } from '../app/utils/current-state.ts'
 const epoch = '00000000-0000-4000-8000-000000000001', recordId = '00000000-0000-4000-8000-000000000002', headId = '00000000-0000-4000-8000-000000000003'
 type Request = { path: string; body: any; resolve: (value: unknown) => void; reject: (value: unknown) => void }
 function harness() {
   const storage = new Map<string, string>(), states = new Map<string, vue.Ref>(), requests: Request[] = []
   let sequence = 10, storageFails = false
-  const context = createContext({ ...vue, ...business, ...helpers, ApiError, failureAction,
+  const context = createContext({ ...vue, ...business, ...helpers, ApiError, failureAction, currentAppState,
     useConnection: () => vue.ref('connected'), useState: (key: string, init: () => unknown) => { if (!states.has(key)) states.set(key, vue.ref(init())); return states.get(key) },
     sessionStorage: { getItem: (key: string) => storage.get(key) ?? null, setItem: (key: string, value: string) => { if (storageFails) throw Error('full'); storage.set(key, value) }, removeItem: (key: string) => storage.delete(key) },
     crypto: { randomUUID: () => `00000000-0000-4000-8000-${String(++sequence).padStart(12, '0')}` },

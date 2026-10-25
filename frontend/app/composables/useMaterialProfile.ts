@@ -140,8 +140,9 @@ export function useMaterialProfile(materialId: string) {
       pending.value = null; recovery.value = ''; notice.value = '사진·구입처를 저장했습니다.'
       completed.value++; return true
     } catch (cause) {
-      recovery.value = cause instanceof ApiError ? (cause.status === 413 ? 'edit' : failureAction(cause.status, cause.code)) : 'retry'
+      recovery.value = cause instanceof ApiError ? (cause.status === 413 ? 'edit' : failureAction(cause.status, cause.code, cause.requestStatus)) : 'retry'
       failure.value = recovery.value === 'refresh' ? '다른 변경으로 자료가 갱신되어 이 요청은 저장하지 않았습니다. 최신 사진·구입처와 비교해 주세요.' : recovery.value === 'blocked' ? '같은 요청 ID에 다른 처리 이력이 있어 재전송할 수 없습니다. 저장 기록을 확인해 주세요.' : recovery.value === 'edit' ? (cause instanceof Error ? cause.message : '사진과 입력을 확인해 주세요.') : '저장 완료를 확인하지 못했습니다. 원래 사진과 입력을 유지했습니다. 같은 요청으로 재시도해 주세요.'
+      if (cause instanceof ApiError && (cause.code === 'stale_generation' || cause.code === 'stale_read')) failure.value = cause.message
       return false
     } finally { busy.value = false }
   }

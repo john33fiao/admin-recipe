@@ -26,6 +26,7 @@ mod receipt;
 mod recipe;
 mod recipe_connections;
 mod reconciliation;
+mod restore;
 mod sale;
 mod schema;
 mod snapshot;
@@ -33,7 +34,7 @@ mod statistics;
 mod stocktake;
 mod waste;
 
-const SCHEMA_VERSION: i64 = 14;
+const SCHEMA_VERSION: i64 = 15;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Material {
@@ -55,6 +56,10 @@ pub enum StoreError {
     Validation(String),
     Conflict(String),
     StaleState(String),
+    StaleGeneration {
+        request_status: crate::restore::RestoreRequestStatus,
+        state: crate::catalog::CatalogState,
+    },
     Unavailable(String),
 }
 
@@ -65,6 +70,8 @@ impl std::fmt::Display for StoreError {
             | Self::Conflict(message)
             | Self::StaleState(message)
             | Self::Unavailable(message) => formatter.write_str(message),
+            Self::StaleGeneration { .. } => formatter
+                .write_str("복원으로 자료가 바뀌었습니다. 원요청과 최신 상태를 확인해 주세요"),
         }
     }
 }
@@ -189,6 +196,7 @@ impl Store {
     /// Verify retained immutable files and regenerate missing ones, including
     /// published records whose files were lost during a database-only move.
     pub fn recover(&mut self) -> Result<(), StoreError> {
+        snapshot::validate_current_preserved(&self.connection)?;
         reconciliation::validate_physical_columns(&self.connection)?;
         correction::validate_physical_columns(&self.connection)?;
         purchase_return::validate_physical_columns(&self.connection)?;
@@ -322,6 +330,7 @@ fn validate_schema(connection: &Connection) -> anyhow::Result<()> {
     connection.prepare("SELECT sequence, payload, published FROM snapshot_outbox LIMIT 0")?;
     connection
         .prepare("SELECT request_id, name, unit, material_id FROM creation_requests LIMIT 0")?;
+    restore::validate_restore_schema(connection)?;
     catalog::validate_catalog_schema(connection)?;
     business::validate_business_schema(connection)?;
     purchase_order::validate_order_schema(connection)?;
@@ -449,6 +458,10 @@ fn migrate(connection: &mut Connection, starting_version: i64) -> anyhow::Result
         }
         profile::migrate_profiles(&transaction)?;
         transaction.pragma_update(None, "user_version", 14)?;
+    }
+    if version < 15 {
+        restore::migrate_restore(&transaction)?;
+        transaction.pragma_update(None, "user_version", 15)?;
     }
     validate_schema(&transaction)?;
     transaction.commit()?;

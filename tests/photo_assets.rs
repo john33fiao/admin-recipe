@@ -1,7 +1,7 @@
 use image::{ExtendedColorType, ImageEncoder};
 use sunchang_hansang::photo_assets::{
-    MAX_PHOTO_BYTES, PhotoFormat, photo_upload, publish_photo, read_photo,
-    validate_asset_descriptor, validate_photo, verify_photo,
+    MAX_PHOTO_BYTES, PhotoCheckError, PhotoFormat, check_photo, photo_upload, publish_photo,
+    read_photo, validate_asset_descriptor, validate_photo, verify_photo,
 };
 
 fn png() -> Vec<u8> {
@@ -160,6 +160,46 @@ fn a_nonregular_destination_is_not_replaced_or_removed() {
     assert!(read_photo(directory.path(), photo.descriptor()).is_err());
 }
 
+#[test]
+fn restore_preflight_distinguishes_missing_unsafe_and_corrupt_and_fully_decodes() {
+    use sha2::{Digest, Sha256};
+    let root = tempfile::tempdir().unwrap();
+    let original = png();
+    let photo = validate_photo(photo_upload("a.png", Some("image/png"), original.clone()).unwrap())
+        .unwrap();
+    assert_eq!(
+        check_photo(root.path(), photo.descriptor()),
+        Err(PhotoCheckError::Missing)
+    );
+    publish_photo(root.path(), &photo).unwrap();
+    check_photo(root.path(), photo.descriptor()).unwrap();
+    let path = root.path().join(&photo.descriptor().asset_key);
+    std::fs::write(&path, b"changed").unwrap();
+    assert_eq!(
+        check_photo(root.path(), photo.descriptor()),
+        Err(PhotoCheckError::Corrupt)
+    );
+    std::fs::remove_file(&path).unwrap();
+    std::fs::create_dir(&path).unwrap();
+    assert_eq!(
+        check_photo(root.path(), photo.descriptor()),
+        Err(PhotoCheckError::UnsafePath)
+    );
+    std::fs::remove_dir(&path).unwrap();
+    // A valid header plus truncated pixel stream has a self-consistent hash and
+    // dimensions, but must not pass the full restore decode as an intact photo.
+    let incomplete = original[..33].to_vec();
+    let mut descriptor = photo.descriptor().clone();
+    descriptor.sha256 = format!("{:x}", Sha256::digest(&incomplete));
+    descriptor.asset_key = format!("assets/photos/{}.png", descriptor.sha256);
+    descriptor.byte_length = incomplete.len() as u64;
+    std::fs::write(root.path().join(&descriptor.asset_key), incomplete).unwrap();
+    assert_eq!(
+        check_photo(root.path(), &descriptor),
+        Err(PhotoCheckError::Corrupt)
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn linked_directories_and_files_are_rejected_without_touching_the_target() {
@@ -169,6 +209,10 @@ fn linked_directories_and_files_are_rejected_without_touching_the_target() {
     symlink(outside.path(), directory.path().join("assets")).unwrap();
     let photo = validate_photo(photo_upload("a.png", Some("image/png"), png()).unwrap()).unwrap();
     assert!(publish_photo(directory.path(), &photo).is_err());
+    assert_eq!(
+        check_photo(directory.path(), photo.descriptor()),
+        Err(PhotoCheckError::UnsafePath)
+    );
     assert_eq!(std::fs::read_dir(outside.path()).unwrap().count(), 0);
     std::fs::remove_file(directory.path().join("assets")).unwrap();
     std::fs::create_dir_all(directory.path().join("assets/photos")).unwrap();
@@ -198,6 +242,10 @@ fn windows_junction_directory_is_rejected_and_external_contents_preserved() {
     assert!(status.success(), "junction setup must really execute");
     let photo = validate_photo(photo_upload("a.png", Some("image/png"), png()).unwrap()).unwrap();
     assert!(publish_photo(directory.path(), &photo).is_err());
+    assert_eq!(
+        check_photo(directory.path(), photo.descriptor()),
+        Err(PhotoCheckError::UnsafePath)
+    );
     assert_eq!(std::fs::read_dir(outside.path()).unwrap().count(), 0);
     // Remove only this empty junction, never recursively traverse the target.
     std::fs::remove_dir(junction).unwrap();

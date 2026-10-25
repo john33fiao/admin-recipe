@@ -79,7 +79,7 @@ export function restoreRecipePending(raw: string | null): RecipePending | null {
     return value as unknown as RecipePending
   } catch { return null }
 }
-export function recipeFailure(status: number, code?: string) { return status === 413 ? 'edit' : failureAction(status, code) }
+export function recipeFailure(status: number, code?: string, requestStatus?: string) { return status === 413 ? 'edit' : failureAction(status, code, requestStatus) }
 export function recipeFraction(quantity: string, basis: string, unit: string) { return basis === '1' ? `${displayDecimal(quantity)}${unit}` : `${displayDecimal(quantity)} ÷ ${displayDecimal(basis)} ${unit}` }
 export function ratioPercent(ratio: { numerator: string; denominator: string }): string {
   const n = BigInt(ratio.numerator), d = BigInt(ratio.denominator)

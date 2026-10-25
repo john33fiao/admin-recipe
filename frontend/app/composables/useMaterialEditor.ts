@@ -91,11 +91,12 @@ export function useMaterialEditor(initial: MaterialDetail, refresh: () => Promis
       completed.value += 1
       return true
     } catch (error) {
-      recovery.value = error instanceof ApiError ? failureAction(error.status, error.code) : 'retry'
+      recovery.value = error instanceof ApiError ? failureAction(error.status, error.code, error.requestStatus) : 'retry'
       if (recovery.value === 'refresh') failure.value = '다른 변경으로 자료가 갱신되어 이 요청은 저장하지 않았습니다. 최신 상태를 확인한 뒤 입력을 다시 확인해 주세요.'
       else if (recovery.value === 'blocked') failure.value = '이 요청 ID에 다른 처리 이력이 있어 재전송할 수 없습니다. 변경 이력을 먼저 확인해 주세요.'
       else if (recovery.value === 'edit') failure.value = error instanceof Error ? error.message : '입력을 확인해 주세요.'
       else failure.value = '저장 완료를 확인하지 못했습니다. 입력과 요청 정보를 유지했습니다. 연결을 확인한 뒤 같은 요청을 재시도해 주세요.'
+      if (error instanceof ApiError && (error.code === 'stale_generation' || error.code === 'stale_read')) failure.value = error.message
       return false
     } finally { completing = false; saving.value = false }
   }

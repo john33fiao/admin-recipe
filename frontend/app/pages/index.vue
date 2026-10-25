@@ -3,7 +3,7 @@ import type { CatalogInput } from '~/types/material'
 import { formatCreatedAt } from '~/utils/material'
 import { materialKinds, normalizeCatalog, priceText, validateCatalogInput } from '~/utils/catalog'
 
-const { name, unit, kind, description, pending, saving, reviewing, failure, saved, rejected, recovery, draftRestored, draftFailure, save, editRejected } = useMaterialRegistration()
+const { name, unit, kind, description, pending, saving, reviewing, failure, saved, rejected, recovery, processed, draftRestored, draftFailure, save, editRejected, newInput } = useMaterialRegistration()
 const { query, archive, materials, loaded, loading, loadFailure, available, loadMaterials } = useMaterialList()
 const errors = ref<Partial<Record<keyof CatalogInput, string>>>({})
 const nameInput = ref<HTMLInputElement | null>(null)
@@ -14,6 +14,9 @@ async function editInput() {
   await editRejected()
   await nextTick()
   nameInput.value?.focus()
+}
+async function startNewInput() {
+  if (await newInput()) { errors.value = {}; await nextTick(); nameInput.value?.focus() }
 }
 
 async function submit() {
@@ -71,6 +74,7 @@ useHead({ title: '재료 관리 | 순창한상' })
         <div v-if="failure" class="notice warning" role="alert">
           <p>{{ failure }}</p>
           <button v-if="recovery === 'edit' || recovery === 'refresh'" class="text-button" type="button" :disabled="!available || saving || reviewing" @click="editInput">{{ reviewing ? '최신 상태 확인 중…' : recovery === 'refresh' ? '최신 상태 확인 후 입력 검토' : '입력 내용 수정' }}</button>
+          <template v-if="processed"><p>원입력은 보존한 뒤 빈 입력란에서 별도 재료를 작성할 수 있습니다. 이 동작으로 이전 등록을 다시 보내지 않습니다.</p><button class="text-button" type="button" :disabled="!available || saving || reviewing" @click="startNewInput">원요청 보관하고 새 재료 입력</button><NuxtLink to="/restore#retained-inputs">보존한 입력 확인</NuxtLink></template>
         </div>
         <button class="primary-button" type="submit" :disabled="!available || saving || reviewing || rejected">
           {{ saving ? '등록 확인 중…' : pending ? '같은 요청 재시도' : '재료 등록' }}

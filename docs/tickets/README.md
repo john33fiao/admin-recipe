@@ -33,7 +33,7 @@ T-002는 계산·데이터 계약, T-020은 공통 UI 기반으로 서로 독립
 | [T-015: 사진·대표 사진·설명과 구입처](T-015-photos-and-suppliers.md) | 1차 · 완료 — 사진·구입처·원본 보존·재시도·호환 검증 | [T-004](T-004-recipes-and-costs.md), [T-005](T-005-business-history.md) |
 | [T-016: 판매 통계·실사 소모·원가 이력 조회](T-016-statistics-and-history.md) | 1차 · 완료 — 기간·유효 정정·정확 합계·실제 이력/연결 검증 | [T-014](T-014-closing-workspace.md) |
 | [T-017: 발주·입고·마지막 실사 중심 운영 개요](T-017-operations-overview.md) | 1차 · 완료 — 실제 확인·논리 변동·전체 목록·키보드 검증 | [T-006](T-006-purchase-orders.md), [T-007](T-007-receipts.md), [T-015](T-015-photos-and-suppliers.md), [T-016](T-016-statistics-and-history.md) |
-| [T-018: 사진과 버전 이력을 포함한 전체 상태 복원](T-018-full-state-restore.md) | 1차 · 대기 | [T-014](T-014-closing-workspace.md), [T-015](T-015-photos-and-suppliers.md) |
+| [T-018: 사진과 버전 이력을 포함한 전체 상태 복원](T-018-full-state-restore.md) | 1차 · 완료 — 전체 상태·사진·원요청 보존과 재시작 검증 | [T-014](T-014-closing-workspace.md), [T-015](T-015-photos-and-suppliers.md) |
 | [T-019: 이전 DB·JSON 호환과 같은 OS 데이터 이동](T-019-data-compatibility.md) | 1차 · 대기 | [T-018](T-018-full-state-restore.md) |
 | [T-020: 공통 탐색·입력 상태·라이트/다크와 반응형 UI](T-020-ui-foundation.md) | 1차 · 완료 — 구현·회귀 검증 통과 | 없음 |
 | [T-021: 1차 업무 통합·복구·배포 준비 검증](T-021-first-release-verification.md) | 1차 · 대기 — 최종 완료에는 T-001 필수 검증 필요 | [T-017](T-017-operations-overview.md), [T-019](T-019-data-compatibility.md) |

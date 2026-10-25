@@ -222,7 +222,7 @@ fn schema_eight_open_adds_sale_relations_without_rewriting_retained_data() {
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
     assert_eq!(
-        new_schema, 14,
+        new_schema, 15,
         "opening schema8 must install current storage"
     );
     for table in ["sales", "sale_cost_rows", "sale_versions", "sale_heads"] {

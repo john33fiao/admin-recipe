@@ -546,30 +546,20 @@ impl Store {
 
     pub(super) fn legacy_create(&mut self, input: CreateMaterial) -> Result<Material, StoreError> {
         let input = validate_input(input)?;
-        let previous: Option<(String, String, String)> = self
-            .connection
-            .query_row(
-                "SELECT name,unit,material_id FROM creation_requests WHERE request_id=?1",
-                [&input.request_id],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
-            )
-            .optional()
-            .map_err(unavailable)?;
-        if let Some((name, unit, id)) = previous {
-            if name != input.name || unit != input.unit {
+        if let Some(previous) =
+            super::restore::preserved_legacy(&self.connection, &input.request_id)?
+        {
+            if previous.name != input.name || previous.unit != input.unit {
                 return Err(StoreError::Conflict(
                     "같은 요청 ID에 다른 입력을 사용할 수 없습니다".into(),
                 ));
             }
             self.recover()?;
-            return self
-                .connection
-                .query_row(
-                    "SELECT id,name,unit,created_at FROM materials WHERE id=?1",
-                    [id],
-                    super::material_from_row,
-                )
-                .map_err(unavailable);
+            let current = state(&self.connection)?;
+            if previous.epoch != current.epoch {
+                return Err(super::restore::generation(current, true));
+            }
+            return Ok(previous.material);
         }
         let payload = serde_json::to_string(&input).map_err(unavailable)?;
         let request_id = input.request_id.clone();

@@ -110,7 +110,7 @@ fn schema_thirteen_migration_preserves_original_columns_and_all_journal_bytes() 
     assert_eq!(
         db.pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0))
             .unwrap(),
-        14
+        15
     );
     for (table, (cols, original)) in before {
         assert_eq!(rows(&db, &table, &cols), original, "{table}");
@@ -187,7 +187,7 @@ fn schema_thirteen_requests_replay_exactly_after_new_schema_write_and_restart() 
         &fs::read(root.path().join("snapshots/00000000000000000047.json")).unwrap(),
     )
     .unwrap();
-    assert_eq!(latest["schema_version"], 14);
+    assert_eq!(latest["schema_version"], 15);
     assert_eq!(latest["state"]["material_profile_versions"], json!([]));
 }
 

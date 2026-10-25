@@ -16,6 +16,15 @@ mod frozen6;
 mod frozen7;
 mod frozen8;
 mod frozen9;
+mod restore_decode;
+mod restore_import;
+#[cfg(test)]
+mod restore_tests;
+pub(super) use restore_decode::{
+    DecodedRestore, PreservedLegacyRequest, PreservedRestoreRecord, PreservedState,
+    current_restore_summary, decode_restore_source, encode_before_restore,
+    validate_current_preserved, verify_restored_active,
+};
 #[cfg(test)]
 mod profile_tests;
 #[cfg(test)]
@@ -56,15 +65,15 @@ struct LegacyRequest {
     unit: String,
     material_id: String,
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct MutationRecord {
-    request_id: String,
-    operation: String,
-    payload: String,
-    response: String,
-    epoch: String,
-    sequence: String,
+pub(super) struct MutationRecord {
+    pub request_id: String,
+    pub operation: String,
+    pub payload: String,
+    pub response: String,
+    pub epoch: String,
+    pub sequence: String,
 }
 
 // Schema 4 predates purchase orders. Its reader must not inherit new live
@@ -461,16 +470,14 @@ pub(super) fn encode(
     request_id: &str,
     recorded_at: &str,
 ) -> Result<String, StoreError> {
-    let state = read_current_state(connection)?;
-    let snapshot = SnapshotV2Schema14 {
-        format_version: 2,
-        schema_version: SCHEMA_VERSION,
-        sequence: sequence.to_string(),
-        request_id: request_id.into(),
-        recorded_at: recorded_at.into(),
-        state,
-    };
-    Ok(serde_json::to_string_pretty(&snapshot).map_err(unavailable)? + "\n")
+    restore_decode::encode_journal(connection, sequence, request_id, recorded_at)
+}
+
+pub(super) fn replace_restore_state(
+    connection: &Connection,
+    decoded: &DecodedRestore,
+) -> Result<(), StoreError> {
+    restore_import::replace_active(connection, decoded)
 }
 
 fn read_current_state(connection: &Connection) -> Result<SnapshotStateV14, StoreError> {
@@ -719,6 +726,10 @@ pub(super) fn validate_source(
             let current: SnapshotV2Schema14 = serde_json::from_str(payload).map_err(unavailable)?;
             validate_current_state(&current.state, sequence)?;
             current.sequence == sequence.to_string()
+        }
+        (Some(2), Some(15)) => {
+            restore_decode::validate_v15(payload, sequence).map_err(unavailable)?;
+            true
         }
         _ => false,
     };
