@@ -620,24 +620,53 @@ async fn receipt_validation_preserves_drafts_and_zero_amount_is_not_missing() {
     assert_eq!(holding["price"]["amount"], "0");
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum ReceiptPreviewEntry {
+    Directory,
+    File(Vec<u8>),
+    WriterLock {
+        length: u64,
+        modified: std::time::SystemTime,
+        readonly: bool,
+    },
+}
+
 fn receipt_preview_files(
     directory: &std::path::Path,
-) -> std::collections::BTreeMap<std::path::PathBuf, Vec<u8>> {
+) -> std::collections::BTreeMap<std::path::PathBuf, ReceiptPreviewEntry> {
     fn collect(
         root: &std::path::Path,
         path: &std::path::Path,
-        files: &mut std::collections::BTreeMap<std::path::PathBuf, Vec<u8>>,
+        files: &mut std::collections::BTreeMap<std::path::PathBuf, ReceiptPreviewEntry>,
     ) {
         for entry in std::fs::read_dir(path).unwrap() {
             let entry = entry.unwrap();
-            if entry.file_type().unwrap().is_dir() {
-                collect(root, &entry.path(), files);
+            let path = entry.path();
+            let relative = path.strip_prefix(root).unwrap().to_path_buf();
+            let file_type = entry.file_type().unwrap();
+            let snapshot = if file_type.is_dir() {
+                files.insert(relative, ReceiptPreviewEntry::Directory);
+                collect(root, &path, files);
+                continue;
+            } else if path == root.join(".writer.lock") {
+                // Windows blocks byte reads of Store's live exclusive lock.
+                // Keep its presence, type and stable metadata in the comparison.
+                assert!(file_type.is_file());
+                let metadata = entry.metadata().unwrap();
+                ReceiptPreviewEntry::WriterLock {
+                    length: metadata.len(),
+                    modified: metadata.modified().unwrap(),
+                    readonly: metadata.permissions().readonly(),
+                }
             } else {
-                files.insert(
-                    entry.path().strip_prefix(root).unwrap().to_path_buf(),
-                    std::fs::read(entry.path()).unwrap(),
-                );
-            }
+                ReceiptPreviewEntry::File(std::fs::read(&path).unwrap_or_else(|error| {
+                    panic!(
+                        "Could not read preview snapshot file {:?}: {error}",
+                        relative
+                    )
+                }))
+            };
+            files.insert(relative, snapshot);
         }
     }
     let mut files = std::collections::BTreeMap::new();
