@@ -4,7 +4,7 @@ const stored = ref<Array<{ key: string; raw: string }>>([])
 const storageFailure = ref(false)
 function load() {
   try {
-    stored.value = Array.from({ length: sessionStorage.length }, (_, index) => sessionStorage.key(index)).filter((key): key is string => !!key && (/^sunchang\.(business|recipe|profile|material-editor)\..+\.(draft|pending)\.v1$/.test(key) || /^sunchang\.(pending-material|draft-material)\.v1$/.test(key) || /^sunchang\.retained\.material\.[0-9a-f-]{36}$/.test(key) || /^sunchang\.restore\.(pending\.v1|retained\.|reviewed\.)/.test(key))).map(key => ({ key, raw: sessionStorage.getItem(key) ?? '' }))
+    stored.value = Array.from({ length: sessionStorage.length }, (_, index) => sessionStorage.key(index)).filter((key): key is string => !!key && (/^sunchang\.(business|recipe|profile|material-editor)\..+\.(draft|pending)\.v1$/.test(key) || /^sunchang\.(pending-material|draft-material)\.v1$/.test(key) || /^sunchang\.retained\.material\.[0-9a-f-]{36}$/.test(key) || /^sunchang\.restore\.(pending\.v1|retained\.|reviewed\.)/.test(key) || /^sunchang\.bulk\.(session\.v1|retained\.[0-9a-f-]{36}\.v1)$/.test(key))).map(key => ({ key, raw: sessionStorage.getItem(key) ?? '' }))
     storageFailure.value = false
   } catch { storageFailure.value = true }
 }
@@ -13,14 +13,15 @@ const rows = computed(() => {
   // Read existing reactive state only; never initialize or clear another editor's pending ref.
   for (const [rawKey, value] of Object.entries(app.payload.state)) {
     const key = rawKey.replace(/^\$s/, '')
-    if (value == null || !(/^sunchang\.(business|recipe|profile|material-editor)\..+\.(pending|payload|input|data|edit|price)$/.test(key) || /^(pending-material|material-name|material-unit|material-description)$/.test(key))) continue
+    if (value == null || !(/^sunchang\.(business|recipe|profile|material-editor)\..+\.(pending|payload|input|data|edit|price)$/.test(key) || /^(pending-material|material-name|material-unit|material-description)$/.test(key) || key === 'sunchang.bulk.session')) continue
     const storageKey = key === 'pending-material' ? 'sunchang.pending-material.v1' : key.endsWith('.pending') ? `${key}.v1` : `memory:${key}`
     try { values.set(storageKey, { key: storageKey, raw: JSON.stringify(value, null, 2), memory: true }) } catch { /* The editor itself remains available if a value is not serializable. */ }
   }
   return [...values.values()]
 })
-function label(key: string) { return key.includes('restore.') ? '복원 원요청' : key.includes('business.') ? '업무 입력' : key.includes('recipe.') ? '레시피 입력' : key.includes('profile.') ? '사진 · 구입처 입력' : '재료 입력' }
+function label(key: string) { return key.includes('bulk.') ? '일괄 입력·원요청' : key.includes('restore.') ? '복원 원요청' : key.includes('business.') ? '업무 입력' : key.includes('recipe.') ? '레시피 입력' : key.includes('profile.') ? '사진 · 구입처 입력' : '재료 입력' }
 function link(key: string) {
+  if (key.includes('sunchang.bulk.')) return '/bulk'
   const match = key.match(/sunchang\.(business|recipe|profile|material-editor)\.([0-9a-f-]{36})\./i)
   return match ? `/${match[1] === 'business' ? 'business' : match[1] === 'recipe' ? 'recipes' : 'materials'}/${match[2]}` : null
 }

@@ -39,6 +39,7 @@ function toggleTheme() {
     <nav class="app-navigation" aria-label="주요 메뉴">
       <NuxtLink to="/overview" :aria-current="route.path === '/overview' || route.path === '/overview/list' ? 'page' : undefined">작업 시작</NuxtLink>
       <NuxtLink to="/workspace" :aria-current="route.path === '/workspace' ? 'page' : undefined">모아 입력</NuxtLink>
+      <NuxtLink to="/bulk" :aria-current="route.path === '/bulk' ? 'page' : undefined">일괄 입력</NuxtLink>
       <NuxtLink to="/" :aria-current="route.path === '/' || route.path.startsWith('/materials/') ? 'page' : undefined">재료 관리</NuxtLink>
       <NuxtLink to="/recipes" :aria-current="route.path.startsWith('/recipes') ? 'page' : undefined">레시피</NuxtLink>
       <NuxtLink to="/business" :aria-current="route.path === '/business' || route.path.startsWith('/business/') ? 'page' : undefined">업무 기록</NuxtLink>

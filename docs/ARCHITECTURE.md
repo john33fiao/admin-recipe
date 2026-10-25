@@ -2,7 +2,7 @@
 
 ## 현재 상태
 
-T-001의 Rust 서버·Nuxt 내장 UI와 재료 등록·저장·조회 흐름을 구현했다. 전체 운영 업무는 아직 구현하지 않았다. 최신 업무 기준은 [ADR-007](decisions/ADR-007-consumption-and-ticket-scope.md)이며, 이전 운영 결정은 [ADR-003](decisions/ADR-003-inventory-events-and-portable-data.md)·[ADR-004](decisions/ADR-004-inventory-exception-policies.md)에 보존한다. [ADR-002](decisions/ADR-002-first-release-and-local-storage.md)의 개발 단계·SQLite·서버 이관 방향은 유지한다.
+T-001의 Rust 서버·Nuxt 내장 UI를 기반으로 T-002~T-018·T-020의 품목·레시피·업무·재고 정산·정정·사진·통계·전체 복원을 구현했다. T-019의 이전 자료 호환·현재 Mac 이동 검증도 완료했다. T-031~T-033은 CSV·직접 표·업로드 편집을 같은 입력 경로로 통합한다. 각 기능의 실행 근거와 외부 실환경 미검증은 [티켓 색인](tickets/README.md)에서 구분한다. 최신 업무 기준은 [ADR-007](decisions/ADR-007-consumption-and-ticket-scope.md)이며, 이전 운영 결정은 [ADR-003](decisions/ADR-003-inventory-events-and-portable-data.md)·[ADR-004](decisions/ADR-004-inventory-exception-policies.md)에 보존한다. [ADR-002](decisions/ADR-002-first-release-and-local-storage.md)의 개발 단계·SQLite·서버 이관 방향은 유지한다.
 
 [ADR-005](decisions/ADR-005-rust-nuxt-local-server.md)에서 Rust·Nuxt, 로컬 서버·브라우저 자동 열기·WebSocket heartbeat 종료, 새 앱의 이전 DB 지원을 확정했다. 2026-10-24 D-12의 검증 대상은 Windows x64·macOS ARM64다. 앱 내부 업데이트와 Electron은 현재 범위에 넣지 않는다. [T-001](tickets/T-001-portable-local-app.md)은 Windows 후속 검증과 최신 macOS 재검증을 수행했으며 별도 장비 배포·실제 절전 기준이 남아 있다. 같은 날짜 사용자 결정(D-12·D-13)으로 OS 간 데이터 왕복 검증만 백로그로 옮겨 완료 필수 조건에서 제외했다. 각 환경의 정상 동작과 같은 OS의 경로 이동 검증은 유지한다. 채택 구현은 [ADR-006](decisions/ADR-006-local-runtime-and-journal.md), 실행 결과는 [검증 기록](tickets/T-001-verification.md)을 따른다.
 
@@ -41,7 +41,7 @@ T-005는 요청 UUID·트랜잭션·JSON 발행/복구를 공통화하고 사전
 
 Rust·Nuxt와 브라우저 실행은 확정됐다. 현재 구성은 Nuxt 정적 SPA를 Rust에 내장하고 Axum·Tokio가 HTTP·WebSocket을, rusqlite `bundled`가 SQLite를 처리한다. T-001에서 이 구성을 채택하고 Cargo.lock·frontend/package-lock.json에 버전을 고정했다. Nuxt 자산 생성 후 OS별 release 빌드가 필요하며, 단일 바이너리·추가 런타임 불필요 여부는 배포물로 검증한다. 근거와 대안은 ADR-005를 따른다.
 
-heartbeat는 복수 연결·재연결 유예·관측 공백을 구분하고 수락한 저장의 완료를 기다리도록 구현했다. 순차 마이그레이션·실패 복구·미래 스키마 보호는 합성 fixture와 과거 구현의 가상 자료로 검증했다. 과거 JSON과 사진 전체 복원은 T-018에서 검증했으며, 이전 자료 호환·같은 OS 이동의 종합은 T-019에 남는다. 실제 절전과 별도 장비·정식 배포 검증도 남아 있다.
+heartbeat는 복수 연결·재연결 유예·관측 공백을 구분하고 수락한 저장의 완료를 기다리도록 구현했다. 순차 마이그레이션·실패 복구·미래 스키마 보호는 합성 fixture와 과거 구현의 가상 자료로 검증했다. 과거 JSON과 사진 전체 복원은 T-018, 이전 자료 호환·같은 OS 이동의 종합은 T-019에서 검증했다. 실제 절전과 별도 장비·정식 배포 검증은 남아 있다.
 
 ## 구현 모듈
 
@@ -179,6 +179,14 @@ T-018은 스키마 v15·JSON v2에서 선택 시점의57개 활성 테이블 전
 복원 전 검사는 writer 잠금 안에서 savepoint에 실제 삽입·FK 검사·형식화 상태 전체 비교를 수행한 뒤 항상 되돌린다. 확인된 직전 상태는 원본 JSON 파일로 보존하고 실제 변경과 등록·복원 요청·새 outbox는 한 트랜잭션에 저장한다. 실패 후 남을 수 있는 미등록 파일은 복원 지점으로 공개하지 않는다. 현재와 선택 자료의 모든 보존 사진을 함께 검사하여 누락·손상·경로 이탈을 차단한다.
 
 JSON 가져오기는 원문 파일 한 개만 받으며64MiB·60초·동시1개로 제한한다. 경로나 URL을 입력받지 않는다. 목록은 원기록/가져온 자료별25개씩 조회한다. 이전 epoch의 쓰기는 전역 보존 요청을 먼저 대조해 처리됨/미처리를 구분하며, 같은 복원 요청의 응답 유실은 현재 epoch에서 원응답으로 확인한다. UI는 이전 세대의 늦은 응답을 적용하지 않고 미저장 입력과 미확인 요청을 보관한다. [ADR-009](decisions/ADR-009-full-state-restore-and-replay.md), [계획](tickets/T-018-plan.md), [실행 검증](tickets/T-018-verification.md)에 계약과 실제 검증 결과·한계를 기록한다.
+
+## CSV·시트 일괄 입력
+
+T-031~T-033은 `/bulk`의 공통 편집표를 사용한다. `bulk-csv.ts`는 UTF-8 CSV/탭 구분 붙여넣기의 크기·행·구조를 검사하고, `bulk.ts`는 기존 품목/레시피/입고 검증과 참조 버전·탭 보관 형식을 연결한다. `bulk-runner.ts`는 전송 전 원요청 보존, 기존 API 순차 실행, 부분 성공·불명 응답·효과 변경의 중단/재시도를 맡는다. `useBulkEntry.ts`는 편집·재검토·복원 세대 변경을 화면과 연결한다. 자세한 선택은 [ADR-010](decisions/ADR-010-unified-bulk-entry.md)을 따른다.
+
+`POST /api/receipts/preview`는 `{state:{epoch,revision},data:<기존 입고 입력>}`을 받는 읽기 전용 경계다. 기존 Store 잠금 안에서 세대/현재 revision·입고 구조를 검사하고 정상 입고와 같은 계산을 사용한다. 업무 초안·요청 원장·outbox·JSON·누락 기록 복구를 쓰지 않는다. 닫힌 필드 구조·세션/Origin·개별16KiB 제한을 유지하며, 오래된 기준은409로 거절한다. 등록 때는 기존 업무 초안→미리보기→확정으로 다시 검사한다.
+
+표 전체 사전 검사에서 오류가 있으면 새 쓰기는0건이다. 등록을 시작하면 항목별 트랜잭션이므로 중간 실패 전 성공한 자료와 JSON은 남는다. 성공 행과 불명 원요청은 잠그고, 참조 버전/세대·입고 효과가 달라지면 자동 갱신하지 않는다. 같은 이름·파일 이름으로 병합하거나 서버에 새 파일 중복 원장을 만들지 않는다. DB 스키마 v15·JSON v2와 전체 복원 계약은 유지한다.
 
 ## 남은 구현 설계
 

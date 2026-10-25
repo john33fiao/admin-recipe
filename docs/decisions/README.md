@@ -13,8 +13,9 @@
 | [ADR-005: Rust·Nuxt 로컬 서버와 DB 하위호환성](ADR-005-rust-nuxt-local-server.md) | 채택, 세부 구현은 ADR-006·T-001 참조 | 2026-10-24 |
 | [ADR-006: 로컬 실행·재료 저장·JSON 기록 구현](ADR-006-local-runtime-and-journal.md) | 채택, OS별 검증 일부 미완료 | 2026-10-24 |
 | [ADR-007: 실사로 소모 확정·판매 개수 배분과 원가 정책](ADR-007-consumption-and-ticket-scope.md) | 채택, ADR-003·ADR-004의 일부 운영 규칙 대체 | 2026-10-24 |
-| [ADR-008: 파일·시트 일괄 입력 세 방식의 백로그 등록](ADR-008-bulk-entry-backlog.md) | 채택 — 백로그 등록, 구현 방식·시점 미정 | 2026-10-25 |
+| [ADR-008: 파일·시트 일괄 입력 세 방식의 백로그 등록](ADR-008-bulk-entry-backlog.md) | 채택 — 등록 이력, 착수/통합은 ADR-010에서 구체화 | 2026-10-25 |
 | [ADR-009: 전체 상태 복원과 보존 요청 원장](ADR-009-full-state-restore-and-replay.md) | 채택 — T-018 구현·검증 완료 | 2026-10-25 |
+| [ADR-010: CSV와 시트 편집을 통합한 일괄 입력](ADR-010-unified-bulk-entry.md) | 채택 — 구현·관련 수용 검증 완료 | 2026-10-25 |
 
 새 기록은 다음 번호의 `ADR-NNN-짧은-제목.md` 형식을 사용하고 다음을 담는다.
 

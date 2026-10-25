@@ -44,3 +44,11 @@ test('new recipe owners require an explicit kind while old unclassified requests
   const pending = { action: 'create', material_id: null, body: { meta: { request_id: id, epoch: id, expected_revision: '1' }, owner, data: blankRecipe() } }
   assert.deepEqual(restoreRecipePending(JSON.stringify(pending)), pending)
 })
+test('restored UUIDv8 material versions are valid references while new request IDs remain UUIDv4', () => {
+  const version = '22222222-2222-8222-8222-222222222222'
+  const data = { ...blankRecipe(), lines: [{ ...line, material_version_id: version }] }
+  assert.deepEqual(validateRecipe(data), {})
+  const pending = { action: 'create', material_id: null, body: { meta: { request_id: id, epoch: id, expected_revision: '1' }, owner: { mode: 'existing', material_id: id, expected_material_version_id: version }, data } }
+  assert.deepEqual(restoreRecipePending(JSON.stringify(pending)), pending)
+  assert.equal(restoreRecipePending(JSON.stringify({ ...pending, body: { ...pending.body, meta: { ...pending.body.meta, request_id: version } } })), null)
+})

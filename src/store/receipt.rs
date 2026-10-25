@@ -569,6 +569,46 @@ pub(super) fn result(
 }
 
 impl Store {
+    pub fn receipt_input_preview(
+        &self,
+        mut input: PreviewReceiptInput,
+    ) -> Result<ReceiptInputPreview, StoreError> {
+        let epoch = catalog::uuid(&input.state.epoch, "상태 세대")?;
+        let revision = input
+            .state
+            .revision
+            .parse::<i64>()
+            .map_err(|_| validation("개정 번호가 올바르지 않습니다"))?;
+        if epoch != input.state.epoch
+            || revision < 0
+            || revision.to_string() != input.state.revision
+        {
+            return Err(validation("상태 세대와 개정 번호는 정규 형식이어야 합니다"));
+        }
+        let state = catalog::state(&self.connection)?;
+        if state.epoch != epoch {
+            return Err(StoreError::StaleGeneration {
+                request_status: crate::restore::RestoreRequestStatus::NotProcessed,
+                state,
+            });
+        }
+        if state.revision != input.state.revision {
+            return Err(StoreError::StaleState(
+                "자료가 바뀌었습니다. 입력을 보존하고 다시 확인해 주세요".into(),
+            ));
+        }
+        normalize_receipt_draft(&mut input.data).map_err(validation)?;
+        // This inspection must not recover journals, create a draft, or publish
+        // files. The server holds the existing Store mutex throughout the read.
+        let (issues, effect) = inspect_receipt(&self.connection, &input.data, (self.today)())?;
+        Ok(ReceiptInputPreview {
+            state,
+            can_confirm: issues.is_empty() && effect.is_some(),
+            issues,
+            effect,
+        })
+    }
+
     pub fn receipt_list(&self, filter: ReceiptFilter) -> Result<ReceiptList, StoreError> {
         let id = filter
             .material_id

@@ -1,5 +1,5 @@
 use crate::{
-    business::{normalize_draft_uuid, validate_draft_text},
+    business::{BusinessEffect, BusinessIssue, normalize_draft_uuid, validate_draft_text},
     catalog::CatalogState,
     domain::DomainError,
     purchase_order::{OrderReceiptClosure, OrderStatus},
@@ -47,6 +47,28 @@ pub struct DraftReceiptV1 {
     pub receipt_date: String,
     pub note: String,
     pub stock_effect: ReceiptStockEffectDraft,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReceiptPreviewBasis {
+    pub epoch: String,
+    pub revision: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PreviewReceiptInput {
+    pub state: ReceiptPreviewBasis,
+    pub data: DraftReceiptV1,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ReceiptInputPreview {
+    pub state: CatalogState,
+    pub can_confirm: bool,
+    pub issues: Vec<BusinessIssue>,
+    pub effect: Option<BusinessEffect>,
 }
 
 /// Keep incomplete business values; only normalize identifiers and note lines.

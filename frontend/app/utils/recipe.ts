@@ -1,7 +1,10 @@
 import type { RecipeDataInput, RecipeOwnerInput, RecipePending, RecipeVersion } from '../types/recipe.ts'
 import { decimalInput, displayDecimal, failureAction, validateCatalogInput } from './catalog.ts'
 
-const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+// Imported/restored entity references can include deterministic UUIDv8 IDs.
+// Newly generated mutation identities keep the existing UUIDv4 contract.
+const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+const requestUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 const object = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value)
 const keys = (value: Record<string, unknown>, fields: string[]) => Object.keys(value).length === fields.length && fields.every(key => Object.hasOwn(value, key))
 const textFields = (value: Record<string, unknown>, fields: string[]) => fields.every(key => typeof value[key] === 'string')
@@ -67,7 +70,7 @@ export function restoreRecipePending(raw: string | null): RecipePending | null {
     const value: unknown = JSON.parse(raw ?? 'null')
     if (!object(value) || !keys(value, ['action', 'material_id', 'body']) || !object(value.body) || !object(value.body.meta)) return null
     const body = value.body, meta = value.body.meta
-    if (!keys(meta, ['request_id', 'epoch', 'expected_revision']) || !textFields(meta, ['request_id', 'epoch', 'expected_revision']) || !uuid.test(meta.request_id as string) || !uuid.test(meta.epoch as string) || !/^\d+$/.test(meta.expected_revision as string)) return null
+    if (!keys(meta, ['request_id', 'epoch', 'expected_revision']) || !textFields(meta, ['request_id', 'epoch', 'expected_revision']) || !requestUuid.test(meta.request_id as string) || !requestUuid.test(meta.epoch as string) || !/^\d+$/.test(meta.expected_revision as string)) return null
     const dataValid = () => recipeShape(body.data) && !Object.keys(validateRecipe(body.data)).length
     if (value.action === 'create') { if (value.material_id !== null || !keys(body, ['meta', 'owner', 'data']) || !ownerShape(body.owner) || !dataValid()) return null }
     else {

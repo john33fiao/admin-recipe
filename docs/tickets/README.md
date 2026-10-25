@@ -2,7 +2,7 @@
 
 모든 활성 요구를 아래 티켓에 연결했다. T-001은 기존 구현·검증 티켓이고 T-002~T-030은 2026-10-24에 요구사항을 전환한 신규 티켓이다. T-002의 설계·독립 검토를 완료했으며 후속 기능 구현과 구분한다.
 
-T-031~T-033은 2026-10-25 사용자 요청으로 추가한 일괄 입력 백로그다([ADR-008](../decisions/ADR-008-bulk-entry-backlog.md)). T-033은 T-031·T-032의 통합안이며 세 항목의 구현 순서나 최종 통합 여부를 확정하지 않는다.
+T-031~T-033은 2026-10-25 백로그에 등록한 뒤 같은 날 명시적 재개로 실행했다. [ADR-008](../decisions/ADR-008-bulk-entry-backlog.md)의 등록 이력과 [ADR-010](../decisions/ADR-010-unified-bulk-entry.md)의 CSV/공통 편집표 통합 결정을 구분한다. 세 티켓의 관련 수용 검증을 완료했으며 [공통 결과](../refs/T-031-T-033-verification.md)에 실제 근거와 한계를 둔다.
 
 ## 상태와 실행 순서
 
@@ -38,7 +38,7 @@ T-002는 계산·데이터 계약, T-020은 공통 UI 기반으로 서로 독립
 | [T-018: 사진과 버전 이력을 포함한 전체 상태 복원](T-018-full-state-restore.md) | 1차 · 완료 — 전체 상태·사진·원요청 보존과 재시작 검증 | [T-014](T-014-closing-workspace.md), [T-015](T-015-photos-and-suppliers.md) |
 | [T-019: 이전 DB·JSON 호환과 같은 OS 데이터 이동](T-019-data-compatibility.md) | 1차 · 완료 — 이전 호환·현재 Mac 전체 이동/재복원·DB-only 한계 검증 | [T-018](T-018-full-state-restore.md) |
 | [T-020: 공통 탐색·입력 상태·라이트/다크와 반응형 UI](T-020-ui-foundation.md) | 1차 · 완료 — 구현·회귀 검증 통과 | 없음 |
-| [T-021: 1차 업무 통합·복구·배포 준비 검증](T-021-first-release-verification.md) | 1차 · 대기 — 최종 완료에는 T-001 필수 검증 필요 | [T-017](T-017-operations-overview.md), [T-019](T-019-data-compatibility.md) |
+| [T-021: 1차 업무 통합·복구·배포 준비 검증](T-021-first-release-verification.md) | 1차 · 진행 중 — 초기 통합·지정 시연 확인, 최종 영향/성능/실환경 잔여 | [T-017](T-017-operations-overview.md), [T-019](T-019-data-compatibility.md) |
 | [T-022: 2차 내일 메뉴·공유 재료 계획 요구 구체화](T-022-next-day-menu-plan.md) | 2차 · 구체화/착수 대기 | [T-021](T-021-first-release-verification.md) |
 | [T-023: 2차 실제 작업시간 기록과 시계열](T-023-work-time-history.md) | 2차 · 구체화/착수 대기 | [T-021](T-021-first-release-verification.md) |
 | [T-024: 시설 점검 카테고리·항목·일일 기록](T-024-facility-checks.md) | 백로그 · 구체화/착수 대기 | 없음 |
@@ -48,9 +48,9 @@ T-002는 계산·데이터 계약, T-020은 공통 UI 기반으로 서로 독립
 | [T-028: 안정화 후 서버 이관 계획](T-028-server-migration.md) | 후속 검토 · 구체화/착수 대기 | [T-021](T-021-first-release-verification.md) |
 | [T-029: 포장재·소모품·인건비 등 원가 확장 검토](T-029-extended-costs.md) | 후속 검토 · 구체화/착수 대기 | [T-021](T-021-first-release-verification.md), [T-023](T-023-work-time-history.md) |
 | [T-030: 소모를 연결할 판매 직접 선택](T-030-manual-consumption-allocation.md) | 백로그 · 구체화/착수 대기 | [T-010](T-010-stocktake-and-waste.md), [T-012](T-012-corrections-and-versions.md) |
-| [T-031: Excel·CSV 양식 업로드와 확인 후 일괄 등록](T-031-file-bulk-import.md) | 백로그 · 구체화/착수 대기 | [T-003](T-003-materials-and-units.md), [T-004](T-004-recipes-and-costs.md), [T-005](T-005-business-history.md), [T-007](T-007-receipts.md) |
-| [T-032: 시트형 화면에서 직접 일괄 입력](T-032-sheet-bulk-entry.md) | 백로그 · 구체화/착수 대기 | [T-003](T-003-materials-and-units.md), [T-004](T-004-recipes-and-costs.md), [T-005](T-005-business-history.md), [T-007](T-007-receipts.md) |
-| [T-033: CSV 업로드 확인 화면에서 편집 후 일괄 등록](T-033-editable-import-preview.md) | 백로그 · 구체화/착수 대기 | [T-031](T-031-file-bulk-import.md)·[T-032](T-032-sheet-bulk-entry.md)의 요구 정리, 개별 구현 완료는 필수 아님 |
+| [T-031: Excel·CSV 양식 업로드와 확인 후 일괄 등록](T-031-file-bulk-import.md) | 완료 — CSV/공통 편집표 구현·수용 검증 | [T-003](T-003-materials-and-units.md), [T-004](T-004-recipes-and-costs.md), [T-005](T-005-business-history.md), [T-007](T-007-receipts.md) |
+| [T-032: 시트형 화면에서 직접 일괄 입력](T-032-sheet-bulk-entry.md) | 완료 — CSV/공통 편집표 구현·수용 검증 | [T-003](T-003-materials-and-units.md), [T-004](T-004-recipes-and-costs.md), [T-005](T-005-business-history.md), [T-007](T-007-receipts.md) |
+| [T-033: CSV 업로드 확인 화면에서 편집 후 일괄 등록](T-033-editable-import-preview.md) | 완료 — CSV/공통 편집표 구현·수용 검증 | [T-031](T-031-file-bulk-import.md)·[T-032](T-032-sheet-bulk-entry.md)의 요구 정리, 개별 구현 완료는 필수 아님 |
 
 ## 공통 완료 조건
 

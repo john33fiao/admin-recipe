@@ -14,7 +14,7 @@ use crate::{
     profile::{MAX_PROFILE_METADATA_BYTES, ReviseMaterialProfile},
     purchase_order::OrderFilter,
     purchase_return::PurchaseReturnFilter,
-    receipt::ReceiptFilter,
+    receipt::{PreviewReceiptInput, ReceiptFilter},
     recipe::{CopyRecipe, CreateRecipe, RecipeFilter, ReviseRecipe},
     recipe_connections::RecipeConnectionsError,
     restore::{ConfirmRestore, PreviewRestore, RestoreTargetQuery},
@@ -305,6 +305,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/orders", get(order_list))
         .route("/api/orders/{id}", get(order_detail))
         .route("/api/receipts", get(receipt_list))
+        .route("/api/receipts/preview", post(receipt_input_preview))
         .route("/api/receipts/{id}", get(receipt_detail))
         .route(
             "/api/receipts/{id}/return-source",
@@ -1196,6 +1197,18 @@ async fn business_preview(
     ))
 }
 
+async fn receipt_input_preview(
+    State(state): State<AppState>,
+    input: Result<Json<PreviewReceiptInput>, JsonRejection>,
+) -> Result<impl IntoResponse, ApiError> {
+    let input = json_input(input)?;
+    Ok(Json(
+        state
+            .with_store(move |s| s.receipt_input_preview(input))
+            .await?,
+    ))
+}
+
 async fn business_confirm(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -1804,6 +1817,7 @@ async fn static_asset(_headers: HeaderMap, request: Request<Body>) -> Response {
         || path == "/overview/list"
         || path == "/restore"
         || path == "/workspace"
+        || path == "/bulk"
         || path == "/statistics"
         || path == "/materials"
         || path == "/business"

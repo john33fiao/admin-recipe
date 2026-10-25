@@ -619,3 +619,245 @@ async fn receipt_validation_preserves_drafts_and_zero_amount_is_not_missing() {
     assert_eq!(holding["price"]["source"], "holding_average");
     assert_eq!(holding["price"]["amount"], "0");
 }
+
+fn receipt_preview_files(
+    directory: &std::path::Path,
+) -> std::collections::BTreeMap<std::path::PathBuf, Vec<u8>> {
+    fn collect(
+        root: &std::path::Path,
+        path: &std::path::Path,
+        files: &mut std::collections::BTreeMap<std::path::PathBuf, Vec<u8>>,
+    ) {
+        for entry in std::fs::read_dir(path).unwrap() {
+            let entry = entry.unwrap();
+            if entry.file_type().unwrap().is_dir() {
+                collect(root, &entry.path(), files);
+            } else {
+                files.insert(
+                    entry.path().strip_prefix(root).unwrap().to_path_buf(),
+                    std::fs::read(entry.path()).unwrap(),
+                );
+            }
+        }
+    }
+    let mut files = std::collections::BTreeMap::new();
+    collect(directory, directory, &mut files);
+    files
+}
+
+#[tokio::test]
+async fn receipt_input_preview_writes_nothing_and_matches_normal_draft_preview() {
+    let (directory, app) = app();
+    let item = material(&app).await;
+    let state = get(&app, "/api/state").await;
+    let mut data = direct_data();
+    data["source"]["material_id"] = item["id"].clone();
+    data["source"]["material_version_id"] = item["version_id"].clone();
+    data["quantity"] = json!("1");
+    data["amount"] = json!("0");
+    data["receipt_date"] = json!("2020-01-02");
+    let before = receipt_preview_files(directory.path());
+    let mut shown = Value::Null;
+    for amount in ["", "0", "12.34", "0"] {
+        data["amount"] = json!(amount);
+        let response = send(
+            &app,
+            "POST",
+            "/api/receipts/preview",
+            Some(&json!({"state":state,"data":data})),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        shown = value(response).await;
+        assert_eq!(shown["state"], state);
+        assert_eq!(shown["can_confirm"], !amount.is_empty());
+        if !amount.is_empty() {
+            assert_eq!(shown["effect"]["quantity"], "1000");
+            assert_eq!(shown["effect"]["after"]["quantity"], "1000");
+            assert_eq!(shown["effect"]["after"]["value"], amount);
+        }
+        assert!(
+            receipt_preview_files(directory.path()) == before,
+            "Read-only preview changed persistent files"
+        );
+    }
+    assert_eq!(get(&app, "/api/business").await["items"], json!([]));
+    let saved = created(&app, "/api/business/drafts", &draft_input(&state, data)).await;
+    assert_eq!(preview(&app, &saved).await["effect"], shown["effect"]);
+}
+
+#[tokio::test]
+async fn receipt_input_preview_rejects_stale_or_noncanonical_and_unknown_fields_without_writes() {
+    let (directory, app) = app();
+    let _item = material(&app).await;
+    let state = get(&app, "/api/state").await;
+    let input = json!({"state":state,"data":direct_data()});
+    let before = receipt_preview_files(directory.path());
+    for revision in ["00", "+1", "-0", " 1", "9223372036854775808"] {
+        let mut bad = input.clone();
+        bad["state"]["revision"] = json!(revision);
+        assert_eq!(
+            send(&app, "POST", "/api/receipts/preview", Some(&bad))
+                .await
+                .status(),
+            StatusCode::BAD_REQUEST
+        );
+    }
+    let mut invalid_epoch = input.clone();
+    invalid_epoch["state"]["epoch"] = json!("invalid");
+    assert_eq!(
+        send(&app, "POST", "/api/receipts/preview", Some(&invalid_epoch))
+            .await
+            .status(),
+        StatusCode::BAD_REQUEST
+    );
+    for path in [
+        vec!["extra"],
+        vec!["state", "extra"],
+        vec!["data", "extra"],
+        vec!["data", "source", "extra"],
+        vec!["data", "stock_effect", "extra"],
+    ] {
+        let mut bad = input.clone();
+        let mut target = &mut bad;
+        for part in &path[..path.len() - 1] {
+            target = &mut target[*part];
+        }
+        target[path[path.len() - 1]] = json!(true);
+        assert_eq!(
+            send(&app, "POST", "/api/receipts/preview", Some(&bad))
+                .await
+                .status(),
+            StatusCode::BAD_REQUEST,
+            "{path:?}"
+        );
+    }
+    let mut stale = input.clone();
+    stale["state"]["revision"] = json!("0");
+    let response = send(&app, "POST", "/api/receipts/preview", Some(&stale)).await;
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert_eq!(value(response).await["code"], "stale_state");
+    stale["state"]["epoch"] = json!(uuid::Uuid::new_v4().to_string());
+    let response = send(&app, "POST", "/api/receipts/preview", Some(&stale)).await;
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    let rejected = value(response).await;
+    assert_eq!(rejected["code"], "stale_generation");
+    assert_eq!(rejected["request_status"], "not_processed");
+    assert_eq!(rejected["state"], state);
+    assert!(
+        receipt_preview_files(directory.path()) == before,
+        "Read-only preview changed persistent files"
+    );
+}
+
+#[tokio::test]
+async fn receipt_input_preview_does_not_republish_missing_journals_or_relax_session_limits() {
+    let (directory, app) = app();
+    let _item = material(&app).await;
+    let state = get(&app, "/api/state").await;
+    let snapshots = directory.path().join("snapshots");
+    let journal = std::fs::read_dir(&snapshots)
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    std::fs::remove_file(&journal).unwrap();
+    let before = receipt_preview_files(directory.path());
+    let input = json!({"state":state,"data":direct_data()});
+    let response = send(&app, "POST", "/api/receipts/preview", Some(&input)).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(value(response).await["can_confirm"], false);
+    assert!(!journal.exists());
+    for (cookie, origin, expected) in [
+        ("", ORIGIN, StatusCode::UNAUTHORIZED),
+        (COOKIE, "http://evil.invalid", StatusCode::FORBIDDEN),
+    ] {
+        let request = Request::builder()
+            .method("POST")
+            .uri("/api/receipts/preview")
+            .header("host", HOST)
+            .header("cookie", cookie)
+            .header("origin", origin)
+            .header("content-type", "application/json")
+            .body(Body::from(input.to_string()))
+            .unwrap();
+        assert_eq!(
+            app.clone().oneshot(request).await.unwrap().status(),
+            expected
+        );
+    }
+    let mut large = input.clone();
+    large["data"]["note"] = json!("x".repeat(17_000));
+    assert_eq!(
+        send(&app, "POST", "/api/receipts/preview", Some(&large))
+            .await
+            .status(),
+        StatusCode::PAYLOAD_TOO_LARGE
+    );
+    assert_eq!(
+        send(&app, "GET", "/api/receipts/preview", None)
+            .await
+            .status(),
+        StatusCode::METHOD_NOT_ALLOWED
+    );
+    assert!(
+        receipt_preview_files(directory.path()) == before,
+        "Read-only preview changed persistent files"
+    );
+    assert_eq!(
+        send(&app, "GET", "/bulk", None).await.status(),
+        StatusCode::OK
+    );
+    assert_eq!(
+        send(&app, "GET", "/bulk/unknown", None).await.status(),
+        StatusCode::NOT_FOUND
+    );
+}
+
+#[tokio::test]
+async fn receipt_input_preview_preserves_included_stock_and_matches_reconciliation_writer() {
+    let (directory, app) = app();
+    let item = material(&app).await;
+    let observed = draft(&app, "stocktake", json!({"rows":[{"material_id":item["id"],"material_version_id":item["version_id"],"quantity":"10","unit":"g","initial_value":{"kind":"manual_amount","amount":"100"},"excess":null}],"note":"가상 시작 기준"})).await;
+    let (confirmed, _) = confirm(&app, &observed).await;
+    let stocktake = get(
+        &app,
+        &format!(
+            "/api/stocktakes/{}",
+            confirmed["result"]["confirmation"]["result"]["stocktake_id"]
+                .as_str()
+                .unwrap()
+        ),
+    )
+    .await;
+    let mut data = measured(&item, "3", "60");
+    data["unit"] = json!("g");
+    data["stock_effect"] = json!({"kind":"reconciled","selections":[{"observation_version_id":stocktake["observations"][0]["version_id"],"source":{"kind":"all_available"},"included_quantity":"3"}]});
+    let state = get(&app, "/api/state").await;
+    let before = receipt_preview_files(directory.path());
+    let response = send(
+        &app,
+        "POST",
+        "/api/receipts/preview",
+        Some(&json!({"state":state,"data":data})),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let shown = value(response).await;
+    assert_eq!(shown["can_confirm"], true, "{shown}");
+    assert!(
+        receipt_preview_files(directory.path()) == before,
+        "Read-only preview changed persistent files"
+    );
+    let saved = created(&app, "/api/business/drafts", &draft_input(&state, data)).await;
+    assert_eq!(preview(&app, &saved).await["effect"], shown["effect"]);
+    confirm(&app, &saved).await;
+    let holding = get(
+        &app,
+        &format!("/api/holdings/{}", item["id"].as_str().unwrap()),
+    )
+    .await;
+    assert_eq!(holding["settlement_basis"]["quantity"], "10");
+    assert_eq!(holding["settlement_basis"]["value"], "130");
+}
