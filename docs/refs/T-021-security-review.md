@@ -50,3 +50,9 @@ RustSec 자료 기준은 커밋 `21d909e4c8bd4e14c7aea58bf980c881a0053ab1`, 2026
 현재 Mac의 실제 Rust631개가 실패0·무시0으로 종료했고 최종 UI165·타입/정적·자산 경계, 새 bulk13개를 확인했다. 기존 브라우저는 같은 후보에서119통과/3관측실패였고 기본 timeout·원단언을 유지한 후속3개가 통과했다. 각 후보·고유 범위와 최초 실패는 통합 기록을 따른다. native select의 Mac headless 화살표 키는 독립 HTML에서도 동작을 확인하지 못해 두 시험의 선택 준비에 `selectOption`을 사용했다. 뒤의 실제 Tab/Enter·Space·재시작/6화면 단언은 유지했고 native 물리 키 선택 성공으로 확대하지 않는다.
 
 최종 전체 업무48·시연 보존 복사본 읽기10과 release 두 규모 자료의 정상 저장/조회·재시작·모든 JSON 보존을 확인했다. 사전 입력을 직접 DB에 적재하거나 원문/무결성 검사를 줄이지 않았다. 공개 후보는 UTF-8/LF·상대 링크·제외 규칙·개인 자료/경로·실제 diff를 검토한다. npm 단일 권고의 High7 전파 경로는 여전히 남아 있으며 수정·감사 전체 무경고를 주장하지 않는다. 실제 볼트 대응과 필수 외부 미검증은 별도로 기록한다.
+
+## Windows 재개 확인 · 2026-10-25
+
+현재 Windows의 잠금 파일 기반 설치 뒤 npm11.19.0으로 `npm --prefix frontend audit --json`을 실행했다. 종료1·High7·Critical0이며 기존 단일 node-forge 권고와 전파 경로가 남는다. 실제 고정 경로는 `nuxt4.6.2 → @nuxt/nitro-server4.6.2 → nitropack2.13.5 → listhen1.10.1 → node-forge1.4.0`이다. 설치된 listhen의 개발 HTTPS 키 생성·서명·PKCS12 처리와 직접적인 `.verify` 호출 부재를 다시 확인했다. [공식 권고](https://github.com/advisories/GHSA-86w9-cpqp-85rv)는 영향 버전1.4.0 이하·패치 없음 상태다. 사용 경로의 제한된 검토를 취약 의존성 제거로 표현하지 않는다.
+
+새 Windows release의 UI 자산·개인 경로 잔존 검사와 정상 API 세션/Origin·복원·일괄 입력 재시도 경계를 [Windows 기록](T-021-windows-resume-verification.md)에 대응한다. Windows에서 새 RustSec 감사를 실행한 것은 아니며 이전 Mac의 권고 DB·결과는 그 시점의 근거로 유지한다. 현재 PE는 Authenticode NotSigned이고 실제 다운로드/SmartScreen·별도 깨끗한 장비 검증은 미실행이다. 이번 앱 종료·재시작은 사용자 요청으로 생략하며 프로세스 정리를 종료 검증 성공으로 세지 않는다.
