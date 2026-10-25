@@ -8,6 +8,7 @@ use crate::{
         ReviseCatalogMaterial,
     },
     lifecycle::{Lifecycle, Policy},
+    overview::{OverviewError, OverviewListQuery},
     photo_assets::{MAX_PHOTO_BYTES, PhotoAssetError, PhotoUpload, photo_upload},
     production::ProductionFilter,
     profile::{MAX_PROFILE_METADATA_BYTES, ReviseMaterialProfile},
@@ -206,6 +207,8 @@ pub fn router(state: AppState) -> Router {
         .route("/api/session", post(session))
         .route("/api/state", get(catalog_state))
         .route("/api/statistics", get(statistics))
+        .route("/api/overview", get(operations_overview))
+        .route("/api/overview/list", get(overview_list))
         .route("/api/materials", get(list).post(create))
         .route("/api/materials/{id}", get(detail))
         .route("/api/materials/{id}/versions", post(revise))
@@ -432,6 +435,58 @@ fn statistics_error(error: StatisticsError) -> ApiError {
         StatisticsError::Unavailable(_) => (StatusCode::SERVICE_UNAVAILABLE, "unavailable"),
     };
     ApiError(status, error.to_string(), code)
+}
+fn overview_error(error: OverviewError) -> ApiError {
+    match error {
+        OverviewError::Validation(message) => {
+            ApiError(StatusCode::BAD_REQUEST, message, "validation")
+        }
+        OverviewError::StaleState(message) => {
+            ApiError(StatusCode::CONFLICT, message, "stale_state")
+        }
+        OverviewError::Unavailable(_) => ApiError(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "운영 개요를 읽지 못했습니다. 저장소를 다시 확인해 주세요.".into(),
+            "unavailable",
+        ),
+    }
+}
+async fn operations_overview(
+    State(state): State<AppState>,
+    uri: Uri,
+) -> Result<impl IntoResponse, ApiError> {
+    if !read_query(&uri)?.is_empty() {
+        return Err(ApiError(
+            StatusCode::BAD_REQUEST,
+            "운영 개요에는 조회 조건을 지정하지 않습니다.".into(),
+            "validation",
+        ));
+    }
+    Ok(Json(
+        state
+            .with_store(|store| Ok(store.operations_overview()))
+            .await?
+            .map_err(overview_error)?,
+    ))
+}
+async fn overview_list(
+    State(state): State<AppState>,
+    uri: Uri,
+) -> Result<impl IntoResponse, ApiError> {
+    read_query(&uri)?;
+    let Query(query) = Query::<OverviewListQuery>::try_from_uri(&uri).map_err(|_| {
+        ApiError(
+            StatusCode::BAD_REQUEST,
+            "목록 종류·시작 위치·조회 epoch와 revision을 각각 한 번 지정하세요.".into(),
+            "validation",
+        )
+    })?;
+    Ok(Json(
+        state
+            .with_store(move |store| Ok(store.overview_list(query)))
+            .await?
+            .map_err(overview_error)?,
+    ))
 }
 async fn statistics(
     State(state): State<AppState>,
@@ -1485,6 +1540,7 @@ async fn static_asset(_headers: HeaderMap, request: Request<Body>) -> Response {
     let path = request.uri().path();
     let spa_route = path == "/"
         || path == "/overview"
+        || path == "/overview/list"
         || path == "/workspace"
         || path == "/statistics"
         || path == "/materials"

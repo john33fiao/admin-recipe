@@ -2,44 +2,6 @@ use super::{broken, sequence};
 use crate::{catalog::MaterialVersion, sale::SaleCount, statistics::*, stocktake::*};
 use std::collections::BTreeMap;
 
-pub(super) fn validate_allocation(
-    allocation: &ConsumptionAllocation,
-    effect: &StocktakeRowEffect,
-) -> Result<(), StatisticsError> {
-    let StocktakeCalculation::Settlement {
-        consumption_quantity,
-        consumption_value,
-        ..
-    } = &effect.calculation
-    else {
-        return Err(broken("시작 기준에는 소모 배분이 없습니다"));
-    };
-    if &allocation.total_quantity != consumption_quantity
-        || &allocation.total_value != consumption_value
-    {
-        return Err(broken("실사 소모와 유효 배분의 합계가 다릅니다"));
-    }
-    let mut quantity = DecimalTotal::default();
-    let mut value = DecimalTotal::default();
-    quantity.add(&allocation.unallocated_quantity)?;
-    value.add(&allocation.unallocated_value)?;
-    for row in &allocation.candidates {
-        match (&row.quantity, &row.value) {
-            (Some(q), Some(v)) => {
-                quantity.add(q)?;
-                value.add(v)?;
-            }
-            (None, None) if allocation.reason == Some(NoAllocationReason::ZeroWeight) => {}
-            _ => return Err(broken("판매별 배분의 미계산 상태가 올바르지 않습니다")),
-        }
-    }
-    if quantity.decimal() != allocation.total_quantity || value.decimal() != allocation.total_value
-    {
-        return Err(broken("소모 총량은 배분과 미배분의 합이어야 합니다"));
-    }
-    Ok(())
-}
-
 pub(super) fn sales(rows: &[StatisticsSale]) -> Result<SalesTotals, StatisticsError> {
     let mut count = 0i128;
     let mut amount = DecimalTotal::default();

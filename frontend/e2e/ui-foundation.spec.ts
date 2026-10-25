@@ -199,6 +199,7 @@ test('three widths and two themes keep overview, form, list and detail usable', 
 
       await page.getByRole('navigation', { name: '주요 메뉴' }).getByRole('link', { name: '작업 시작' }).click()
       await expect(page.getByRole('heading', { name: '작업 시작', exact: true })).toBeVisible()
+      await expect(page.getByText('전체 품목(보관 포함)', { exact: true })).toBeVisible()
       await expect(page.locator('.overview-count')).toHaveText(`${stored.length}개`)
       await expect(page.getByRole('navigation', { name: '주요 메뉴' }).getByRole('link', { name: '작업 시작' })).toHaveAttribute('aria-current', 'page')
       await expectFits(page)

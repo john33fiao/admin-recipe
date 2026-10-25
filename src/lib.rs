@@ -4,6 +4,7 @@ pub mod correction;
 pub mod domain;
 pub mod holding;
 pub mod lifecycle;
+pub mod overview;
 pub mod photo_assets;
 pub mod production;
 pub mod profile;
