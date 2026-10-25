@@ -2,6 +2,8 @@
 
 모든 활성 요구를 아래 티켓에 연결했다. T-001은 기존 구현·검증 티켓이고 T-002~T-030은 2026-10-24에 요구사항을 전환한 신규 티켓이다. T-002의 설계·독립 검토를 완료했으며 후속 기능 구현과 구분한다.
 
+T-031~T-033은 2026-10-25 사용자 요청으로 추가한 일괄 입력 백로그다([ADR-008](../decisions/ADR-008-bulk-entry-backlog.md)). T-033은 T-031·T-032의 통합안이며 세 항목의 구현 순서나 최종 통합 여부를 확정하지 않는다.
+
 ## 상태와 실행 순서
 
 - **착수 가능:** 미완료 선행 티켓이 없는 1차 작업. 구현 전 관련 설계를 확인한다.
@@ -46,6 +48,9 @@ T-002는 계산·데이터 계약, T-020은 공통 UI 기반으로 서로 독립
 | [T-028: 안정화 후 서버 이관 계획](T-028-server-migration.md) | 후속 검토 · 구체화/착수 대기 | [T-021](T-021-first-release-verification.md) |
 | [T-029: 포장재·소모품·인건비 등 원가 확장 검토](T-029-extended-costs.md) | 후속 검토 · 구체화/착수 대기 | [T-021](T-021-first-release-verification.md), [T-023](T-023-work-time-history.md) |
 | [T-030: 소모를 연결할 판매 직접 선택](T-030-manual-consumption-allocation.md) | 백로그 · 구체화/착수 대기 | [T-010](T-010-stocktake-and-waste.md), [T-012](T-012-corrections-and-versions.md) |
+| [T-031: Excel·CSV 양식 업로드와 확인 후 일괄 등록](T-031-file-bulk-import.md) | 백로그 · 구체화/착수 대기 | [T-003](T-003-materials-and-units.md), [T-004](T-004-recipes-and-costs.md), [T-005](T-005-business-history.md), [T-007](T-007-receipts.md) |
+| [T-032: 시트형 화면에서 직접 일괄 입력](T-032-sheet-bulk-entry.md) | 백로그 · 구체화/착수 대기 | [T-003](T-003-materials-and-units.md), [T-004](T-004-recipes-and-costs.md), [T-005](T-005-business-history.md), [T-007](T-007-receipts.md) |
+| [T-033: CSV 업로드 확인 화면에서 편집 후 일괄 등록](T-033-editable-import-preview.md) | 백로그 · 구체화/착수 대기 | [T-031](T-031-file-bulk-import.md)·[T-032](T-032-sheet-bulk-entry.md)의 요구 정리, 개별 구현 완료는 필수 아님 |
 
 ## 공통 완료 조건
 
