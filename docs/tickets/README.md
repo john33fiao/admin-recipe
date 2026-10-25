@@ -38,7 +38,7 @@ T-002는 계산·데이터 계약, T-020은 공통 UI 기반으로 서로 독립
 | [T-018: 사진과 버전 이력을 포함한 전체 상태 복원](T-018-full-state-restore.md) | 1차 · 완료 — 전체 상태·사진·원요청 보존과 재시작 검증 | [T-014](T-014-closing-workspace.md), [T-015](T-015-photos-and-suppliers.md) |
 | [T-019: 이전 DB·JSON 호환과 같은 OS 데이터 이동](T-019-data-compatibility.md) | 1차 · 완료 — 이전 호환·현재 Mac 전체 이동/재복원·DB-only 한계 검증 | [T-018](T-018-full-state-restore.md) |
 | [T-020: 공통 탐색·입력 상태·라이트/다크와 반응형 UI](T-020-ui-foundation.md) | 1차 · 완료 — 구현·회귀 검증 통과 | 없음 |
-| [T-021: 1차 업무 통합·복구·배포 준비 검증](T-021-first-release-verification.md) | 1차 · 진행 중 — 로컬 통합·시연·규모 측정 완료, 필수 외부05 미검증 | [T-017](T-017-operations-overview.md), [T-019](T-019-data-compatibility.md) |
+| [T-021: 1차 업무 통합·복구·배포 준비 검증](T-021-first-release-verification.md) | 1차 · 진행 중 — 로컬 통합·시연·규모 측정, 추가 Mac24분 부분 관측·요청 종료검증 생략, 필수 외부05 미검증 | [T-017](T-017-operations-overview.md), [T-019](T-019-data-compatibility.md) |
 | [T-022: 2차 내일 메뉴·공유 재료 계획 요구 구체화](T-022-next-day-menu-plan.md) | 2차 · 구체화/착수 대기 | [T-021](T-021-first-release-verification.md) |
 | [T-023: 2차 실제 작업시간 기록과 시계열](T-023-work-time-history.md) | 2차 · 구체화/착수 대기 | [T-021](T-021-first-release-verification.md) |
 | [T-024: 시설 점검 카테고리·항목·일일 기록](T-024-facility-checks.md) | 백로그 · 구체화/착수 대기 | 없음 |
