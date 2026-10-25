@@ -132,7 +132,15 @@ test('candidate responses cannot replace a new material selection and keyboard r
   await open(page); const first = await material(page, '가상 이전 근거'), next = await material(page, '가상 다음 근거'); const firstStock = await observe(page, first, '10', '10'), nextStock = await observe(page, next, '10', '20')
   await start(page, first); await fill(page, '2', '4', 'g'); await selectMode(page); await choose(page, firstStock.observations[0].version_id, '1')
   let release = () => {}; const gate = new Promise<void>(resolve => { release = resolve }); await page.route(`**/api/materials/${first.id}/receipt-inclusion-bases`, async route => { await gate; await route.continue() }); await page.getByRole('button', { name: '실사 근거 새로고침' }).click(); await page.getByLabel('입고 재료', { exact: true }).selectOption(next.id); await expect(page.locator('#receipt-inclusion-0-included_quantity')).toHaveValue('1'); const late = page.waitForResponse(response => new URL(response.url()).pathname === `/api/materials/${first.id}/receipt-inclusion-bases`); release(); await late
-  await page.locator('#receipt-inclusion-0-observation_version_id').selectOption(nextStock.observations[0].version_id); await page.locator('#receipt-inclusion-0-source').focus(); await page.keyboard.press('Home'); await page.keyboard.press('ArrowDown'); await expect(page.locator('#receipt-inclusion-0-source')).toHaveValue('all'); await page.keyboard.press('Tab'); await expect(page.locator('#receipt-inclusion-0-included_quantity')).toBeFocused()
+  await page.locator('#receipt-inclusion-0-observation_version_id').selectOption(nextStock.observations[0].version_id)
+  const sourceSelect = page.locator('#receipt-inclusion-0-source')
+  await sourceSelect.focus()
+  // macOS headless native selects do not commit ArrowDown/Home (isolated
+  // native-select probe). Keep the same selected value and keyboard row flow.
+  if (process.platform === 'darwin') await sourceSelect.selectOption('all')
+  else { await page.keyboard.press('Home'); await page.keyboard.press('ArrowDown') }
+  await expect(sourceSelect).toHaveValue('all')
+  await page.keyboard.press('Tab'); await expect(page.locator('#receipt-inclusion-0-included_quantity')).toBeFocused()
   await page.getByRole('button', { name: '포함 근거 추가', exact: true }).focus(); await page.keyboard.press('Space'); await expect(page.locator('#receipt-inclusion-1-observation_version_id')).toBeFocused(); await page.getByRole('button', { name: '포함 근거 2 삭제', exact: true }).focus(); await page.keyboard.press('Enter'); await expect(page.locator('#receipt-inclusion-0-observation_version_id')).toBeFocused()
   const path = await save(page); await preview(page); const saved = await get(page, `/api${path}`); expect(saved.head.payload.data.source.material_id).toBe(next.id); expect(saved.head.payload.data.stock_effect.selections[0].observation_version_id).toBe(nextStock.observations[0].version_id); expect(saved.head.payload.data.stock_effect.selections[0].included_quantity).toBe('1'); await finish(page)
 })

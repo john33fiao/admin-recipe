@@ -142,7 +142,12 @@ test('report survives normal restart and is usable with keyboard and six viewpor
   let timer: ReturnType<typeof setTimeout> | undefined; const [code, signal] = await Promise.race([closed, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(Error('statistics normal shutdown timed out')), 180_000) })]).finally(() => clearTimeout(timer)); expect(code).toBe(0); expect(signal).toBeNull(); await launch(); await open(page); await visit(page, path)
   await expect(page.getByRole('heading', { name: '적용된 조회 기간', exact: true })).toBeVisible(); await expect(page.getByLabel('연결을 볼 품목')).toHaveValue(data.menu.item.id)
   await page.getByRole('button', { name: '기간 조회', exact: true }).focus(); await page.keyboard.press('Tab'); await expect(page.getByRole('link', { name: '판매·원가', exact: true })).toBeFocused(); await page.keyboard.press('Enter'); await expect(page).toHaveURL(/#statistics-sales-title$/)
-  await page.getByLabel('시계열 값').focus(); await page.keyboard.press('ArrowDown'); await page.keyboard.press('Enter'); await expect(page.getByLabel('시계열 값')).toHaveValue('count')
+  const metricSelect = page.getByLabel('시계열 값')
+  await metricSelect.focus()
+  // Keep the same selected metric when macOS headless native menus ignore arrows.
+  if (process.platform === 'darwin') await metricSelect.selectOption('count')
+  else { await page.keyboard.press('ArrowDown'); await page.keyboard.press('Enter') }
+  await expect(metricSelect).toHaveValue('count')
   const selected = page.getByRole('button', { name: data.menu.item.name, exact: true }).last(); await selected.focus(); await page.keyboard.press('Space'); await expect(selected).toHaveAttribute('aria-pressed', 'true'); await expect(page.locator('.chart-selection')).toContainText('1개')
   const details = page.getByText('당시 레시피 기준 원가 · 1개 기준', { exact: true }); await details.focus(); await page.keyboard.press('Enter'); await expect(page.locator('.sale-cost-snapshot')).toBeVisible()
   for (const [width, height] of [[1440, 900], [768, 1024], [390, 844]] as const) { await page.setViewportSize({ width, height }); for (const theme of ['light', 'dark'] as const) { if (await page.locator('html').getAttribute('data-theme') !== theme) await page.getByRole('button', { name: theme === 'dark' ? '다크 모드로 전환' : '라이트 모드로 전환' }).click(); await expect(page.locator('html')).toHaveAttribute('data-theme', theme); expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true); await page.screenshot({ path: test.info().outputPath(`statistics-${width}-${theme}.png`), fullPage: true }) } }

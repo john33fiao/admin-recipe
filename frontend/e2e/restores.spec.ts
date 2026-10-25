@@ -111,7 +111,15 @@ test('late old success retains original processed request without reapplying it'
   let writes = 0; page.on('request', request => { if (request.method() === 'POST' && new URL(request.url()).pathname === '/api/materials') writes++ })
   await page.getByRole('button', { name: '원요청 보관하고 새 재료 입력', exact: true }).click(); await expect(page.getByLabel('재료 이름', { exact: false })).toHaveValue(''); expect(writes).toBe(0)
   await page.getByLabel('재료 이름', { exact: false }).fill('가상 복원 뒤 별도 새입력'); const sending = page.waitForRequest(request => request.method() === 'POST' && new URL(request.url()).pathname === '/api/materials'); await page.getByRole('button', { name: '재료 등록', exact: true }).click(); const newRequest = (await sending).postDataJSON(); expect(newRequest.request_id).not.toBe(original.request_id); expect(newRequest.epoch).toBe((await get(page, '/api/state')).epoch); await expect(page.getByRole('link', { name: '등록한 재료 보기', exact: true })).toBeVisible()
-  await page.getByRole('navigation', { name: '주요 메뉴' }).getByRole('link', { name: '자료 복원', exact: true }).click(); const retainedIndex = await page.locator('#retained-inputs textarea').evaluateAll(elements => elements.findIndex(element => (element as HTMLTextAreaElement).value.includes('가상 늦게 도착하는 등록'))); expect(retainedIndex).toBeGreaterThanOrEqual(0); const retained = page.locator('#retained-inputs details').nth(retainedIndex); await retained.locator('summary').click(); await expect(retained.locator('textarea')).toHaveValue(/가상 늦게 도착하는 등록/); await other.close()
+  await page.getByRole('navigation', { name: '주요 메뉴' }).getByRole('link', { name: '자료 복원', exact: true }).click()
+  await expect(page).toHaveURL(new URL('/restore', launchUrl).toString())
+  await expect(page.getByRole('heading', { name: '보존한 입력·요청', exact: true })).toBeVisible()
+  let retainedIndex = -1
+  await expect.poll(async () => {
+    retainedIndex = await page.locator('#retained-inputs textarea').evaluateAll(elements => elements.findIndex(element => (element as HTMLTextAreaElement).value.includes('가상 늦게 도착하는 등록')))
+    return retainedIndex
+  }).toBeGreaterThanOrEqual(0)
+  const retained = page.locator('#retained-inputs details').nth(retainedIndex); await retained.locator('summary').click(); await expect(retained.locator('textarea')).toHaveValue(/가상 늦게 도착하는 등록/); await other.close()
 })
 
 test('restore list keysets, keyboard focus and full comparison remain readable in six layouts', async ({ page }, info) => {
